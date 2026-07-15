@@ -2,6 +2,8 @@
 
 Last updated: 2026-07-15
 
+Implementation status: the first functional MVP vertical slice is implemented. The calendar is intentionally native to TaskBot and does not use Discord OAuth or synchronize with external calendar providers. The dashboard uses a first-party local username/password login with server-side sessions.
+
 ## 1. Project summary
 
 TaskBot is a Discord to-do, reminder, and conversational assistant hosted on Railway. Users can create scheduled reminders through slash commands or by mentioning the bot in natural language. Scheduled reminders appear in a web dashboard with a calendar view. The bot can also answer general questions through the OpenAI API.
@@ -19,7 +21,7 @@ The project will be developed in this GitHub repository and deployed from GitHub
 - Display scheduled reminders in a secure web calendar.
 - Preserve all reminders across deployments and Railway restarts.
 - Keep AI usage and hosting costs low for a personal deployment.
-- Leave room for Google Calendar or Outlook integration later.
+- Keep calendar data local to TaskBot and PostgreSQL.
 
 ## 3. MVP scope
 
@@ -57,24 +59,24 @@ The bot should also support ordinary questions and conversation:
 @TaskBot explain the difference between SOAP and DAP notes
 ```
 
-### Dashboard
+### Local TaskBot dashboard
 
 The MVP dashboard should provide:
 
-- Discord OAuth login.
-- Server-side guild and permission checks.
+- Local username/password access intended for the owner's personal deployment.
 - Month, week, day, and list calendar views.
 - Reminder creation and editing.
 - Filtering by server, channel, creator, and status.
 - Status colors for scheduled, sent, completed, cancelled, and failed reminders.
 - Links to associated Discord messages when available.
 
-### Deferred features
+### Out-of-scope features
 
 These are planned after the MVP is stable:
 
 - Google Calendar synchronization.
 - Outlook Calendar synchronization.
+- Discord OAuth for the dashboard.
 - Advanced recurring reminders.
 - Rich natural-language recurrence parsing.
 - Reminder templates.
@@ -104,7 +106,7 @@ The application can be split into separate web and worker services later if load
 - `goose` for database migrations.
 - Go `net/http` with a lightweight router.
 - Server-rendered HTML and FullCalendar for the dashboard.
-- Discord OAuth2 for dashboard authentication.
+- Local bcrypt password verification and server-side session cookies for dashboard access.
 - OpenAI Responses API for AI conversation and structured tool calls.
 - Docker for repeatable local and Railway builds.
 - GitHub Actions for formatting, tests, static analysis, and builds.
@@ -256,18 +258,12 @@ Required guarantees:
 - Execution result.
 - Token usage, latency, and API trace identifier.
 
-### `oauth_sessions`
-
-- Hashed session identifier.
-- Discord identity.
-- Expiration timestamp.
-
 ## 8. Security and privacy
 
 - Keep Discord and OpenAI secrets only in Railway environment variables.
 - Never expose the bot token or OpenAI API key to browser code.
-- Authenticate the dashboard through Discord OAuth2.
-- Recheck guild membership and permissions on the server for every protected action.
+- Protect the dashboard with a strong local password. Plaintext environment configuration is supported, while a bcrypt hash remains the safer option.
+- Use expiring server-side sessions, `HttpOnly` cookies, and CSRF protection.
 - Restrict broad role and channel pings to authorized users.
 - Isolate conversation history by user, channel, and guild.
 - Provide `/chat reset` and `/privacy delete-my-data`.
@@ -342,10 +338,9 @@ TaskBot/
 - Track token usage, latency, errors, and estimated cost.
 - Build an evaluation set for date parsing and safe action behavior.
 
-### Phase 5: Dashboard
+### Phase 5: Local TaskBot dashboard
 
-- Add Discord OAuth login and sessions.
-- Implement server-side authorization.
+- Add local login, logout, password verification, session expiration, and CSRF protection.
 - Add reminder list and FullCalendar views.
 - Add create, edit, complete, and cancel forms.
 - Add filters and delivery failure details.
@@ -361,19 +356,17 @@ TaskBot/
 - Add backup and restore documentation.
 - Set OpenAI project budgets and usage alerts.
 
-### Phase 7: Calendar integrations
+### Phase 7: Calendar refinement
 
-- Begin with Google Calendar after the MVP is stable.
-- Add provider OAuth and encrypted token storage.
-- Decide whether synchronization is one-way or bidirectional.
-- Define conflict, deletion, and recurrence behavior.
-- Add Outlook only if it is still needed.
+- Keep calendar data entirely within TaskBot and PostgreSQL.
+- Improve calendar editing, filtering, and presentation after functional review.
+- Do not add Google Calendar, Outlook, or provider OAuth integrations.
 
 ## 11. Testing strategy
 
 - Unit tests for date parsing, timezone conversion, authorization, and reminder state transitions.
 - Integration tests using PostgreSQL for claiming, retries, and idempotency.
-- HTTP tests for dashboard authentication and authorization.
+- HTTP tests for dashboard login and session protection.
 - Mocked Discord and OpenAI API tests.
 - AI evaluations for relative dates, missing details, ambiguous dates, role mentions, prompt injection, and attempted unauthorized actions.
 - Tests for daylight-saving boundaries and Railway-style restarts.
@@ -398,7 +391,6 @@ TaskBot/
 - Exact conversation retention period.
 - Whether general AI chat is available to every allowed server member or only selected users.
 - Railway service and PostgreSQL plan after current pricing is reviewed.
-- Whether Google Calendar synchronization will be one-way or bidirectional.
 
 ## 14. Definition of MVP completion
 
@@ -407,3 +399,22 @@ The MVP is complete when an authorized user can create a reminder through a slas
 ## 15. Planning authority
 
 This file is the current source of truth for TaskBot scope and architecture. Future implementation work should consult it before making material design decisions. When requirements or architectural decisions change, update this file and its `Last updated` date as part of the same change.
+
+## 16. Implemented baseline
+
+The initial implementation includes:
+
+- Go service configuration and structured logging.
+- Embedded, versioned PostgreSQL migrations.
+- Reminder CRUD operations, timezone preferences, durable due claiming, retries, and delivery records.
+- Discord slash commands for create, list, edit, cancel, complete, to-do creation, timezone selection, conversation reset, and privacy deletion.
+- Bot-mention routing through the OpenAI Responses API with an application-owned `create_reminder` tool.
+- A `gpt-5-nano` default that can be changed through configuration.
+- A locally authenticated calendar dashboard with create and cancel controls.
+- Health and readiness endpoints.
+- Privacy-conscious operational audit messages in a configured Discord log channel.
+- A Discord streaming presence labeled “Streamlining your tasks” linked to the configured dashboard URL.
+- Docker, Railway, local PostgreSQL, GitHub Actions, and operating documentation.
+- Unit, HTTP, mocked OpenAI, scheduler, timezone, and opt-in PostgreSQL integration tests.
+
+Before opening the bot to multiple users or servers, extend the single-owner local account model and complete a focused security review. Discord OAuth is not part of the current product direction.
