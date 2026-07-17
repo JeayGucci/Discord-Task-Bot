@@ -14,6 +14,7 @@ The authoritative product and architecture plan is in [plan.md](plan.md).
 - Low-cost `gpt-5-nano` default with AI-independent slash commands and delivery.
 - Transactional due-reminder claiming, retry backoff, and duplicate-delivery records.
 - Local-login calendar dashboard and session-protected reminder API.
+- Admin-managed dashboard users with optional Discord ID linking.
 - Health and readiness checks for Railway.
 - Privacy-conscious operational audit messages in a configured Discord channel.
 - Discord streaming presence labeled “Streamlining your tasks”.
@@ -60,6 +61,8 @@ The service applies versioned SQL migrations at startup. If Discord credentials 
 8. Leave `DISCORD_REGISTER_COMMANDS` unset or `false` for normal production deploys to avoid unnecessary Discord REST calls during restarts. Set it to `true` for one deployment after changing slash commands.
 
 Do not commit `.env`, Discord tokens, OpenAI keys, or production database URLs.
+
+The dashboard login remains a single admin account. From the dashboard, the admin can create managed users, optionally link each one to a Discord user ID, and create reminders for linked Discord users.
 
 ## Commands
 

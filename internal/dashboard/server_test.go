@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmantheitguy/Discord-Task-Bot/internal/reminders"
+	"github.com/jmantheitguy/Discord-Task-Bot/internal/users"
 )
 
 type fakeStore struct{}
@@ -44,6 +45,16 @@ func (fakeStore) SaveConversation(context.Context, string, string, string, strin
 func (fakeStore) ResetConversation(context.Context, string, string) error { return nil }
 func (fakeStore) DeleteUserData(context.Context, string) error            { return nil }
 func (fakeStore) Ping(context.Context) error                              { return nil }
+func (fakeStore) ListUsers(context.Context) ([]users.User, error) {
+	return []users.User{{ID: uuid.MustParse("11111111-1111-1111-1111-111111111111"), DisplayName: "Owner", DiscordUserID: "owner", Timezone: "UTC"}}, nil
+}
+func (fakeStore) CreateUser(context.Context, users.CreateParams) (users.User, error) {
+	return users.User{ID: uuid.MustParse("22222222-2222-2222-2222-222222222222"), DisplayName: "New", DiscordUserID: "123", Timezone: "UTC"}, nil
+}
+func (fakeStore) UpdateUser(context.Context, users.UpdateParams) (users.User, error) {
+	return users.User{ID: uuid.MustParse("22222222-2222-2222-2222-222222222222"), DisplayName: "Updated", DiscordUserID: "123", Timezone: "UTC"}, nil
+}
+func (fakeStore) DeleteUser(context.Context, uuid.UUID) error { return nil }
 
 type fakeSessions struct {
 	hash           []byte
@@ -107,5 +118,25 @@ func TestInvalidLogin(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d", rec.Code)
+	}
+}
+
+func TestAuthenticatedUserAPI(t *testing.T) {
+	sessions := &fakeSessions{hash: hashToken("token"), username: "admin", csrf: "csrf", expires: time.Now().Add(time.Hour)}
+	s := New(fakeStore{}, fakeStore{}, sessions, "admin", "", "right", "owner", "UTC", slog.Default())
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	req.AddCookie(&http.Cookie{Name: "taskbot_session", Value: "token"})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list users status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/users", strings.NewReader(`{"DisplayName":"New","DiscordUserID":"123","Timezone":"UTC"}`))
+	req.AddCookie(&http.Cookie{Name: "taskbot_session", Value: "token"})
+	req.Header.Set("X-CSRF-Token", "csrf")
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create user status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

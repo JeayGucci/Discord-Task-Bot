@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jmantheitguy/Discord-Task-Bot/internal/reminders"
+	"github.com/jmantheitguy/Discord-Task-Bot/internal/users"
 )
 
 //go:embed migrations/*.sql
@@ -120,6 +121,93 @@ func scanReminder(row pgx.Row) (reminders.Reminder, error) {
 		return r, reminders.ErrNotFound
 	}
 	return r, err
+}
+
+func scanUser(row pgx.Row) (users.User, error) {
+	var u users.User
+	err := row.Scan(&u.ID, &u.DisplayName, &u.DiscordUserID, &u.Timezone, &u.CreatedAt, &u.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return u, users.ErrNotFound
+	}
+	return u, err
+}
+
+func (s *Store) ListUsers(ctx context.Context) ([]users.User, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id,display_name,COALESCE(discord_user_id,''),timezone,created_at,updated_at FROM dashboard_users ORDER BY lower(display_name),created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]users.User, 0)
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, u)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) CreateUser(ctx context.Context, p users.CreateParams) (users.User, error) {
+	if p.Timezone == "" {
+		p.Timezone = s.defaultTimezone
+	}
+	if err := users.Validate(p.DisplayName, p.Timezone); err != nil {
+		return users.User{}, err
+	}
+	u := users.User{ID: uuid.New(), DisplayName: strings.TrimSpace(p.DisplayName), DiscordUserID: strings.TrimSpace(p.DiscordUserID), Timezone: p.Timezone}
+	return s.saveUser(ctx, u, true)
+}
+
+func (s *Store) UpdateUser(ctx context.Context, p users.UpdateParams) (users.User, error) {
+	if p.Timezone == "" {
+		p.Timezone = s.defaultTimezone
+	}
+	if err := users.Validate(p.DisplayName, p.Timezone); err != nil {
+		return users.User{}, err
+	}
+	u := users.User{ID: p.ID, DisplayName: strings.TrimSpace(p.DisplayName), DiscordUserID: strings.TrimSpace(p.DiscordUserID), Timezone: p.Timezone}
+	return s.saveUser(ctx, u, false)
+}
+
+func (s *Store) saveUser(ctx context.Context, u users.User, create bool) (users.User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return users.User{}, err
+	}
+	defer tx.Rollback(ctx)
+	discordID := any(nil)
+	if u.DiscordUserID != "" {
+		discordID = u.DiscordUserID
+	}
+	var row pgx.Row
+	if create {
+		row = tx.QueryRow(ctx, `INSERT INTO dashboard_users(id,display_name,discord_user_id,timezone) VALUES($1,$2,$3,$4) RETURNING id,display_name,COALESCE(discord_user_id,''),timezone,created_at,updated_at`, u.ID, u.DisplayName, discordID, u.Timezone)
+	} else {
+		row = tx.QueryRow(ctx, `UPDATE dashboard_users SET display_name=$2,discord_user_id=$3,timezone=$4,updated_at=now() WHERE id=$1 RETURNING id,display_name,COALESCE(discord_user_id,''),timezone,created_at,updated_at`, u.ID, u.DisplayName, discordID, u.Timezone)
+	}
+	saved, err := scanUser(row)
+	if err != nil {
+		return users.User{}, err
+	}
+	if saved.DiscordUserID != "" {
+		if _, err := tx.Exec(ctx, `INSERT INTO users(discord_user_id,display_name,timezone) VALUES($1,$2,$3) ON CONFLICT(discord_user_id) DO UPDATE SET display_name=excluded.display_name,timezone=excluded.timezone,updated_at=now()`, saved.DiscordUserID, saved.DisplayName, saved.Timezone); err != nil {
+			return users.User{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return users.User{}, err
+	}
+	return saved, nil
+}
+
+func (s *Store) DeleteUser(ctx context.Context, id uuid.UUID) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM dashboard_users WHERE id=$1`, id)
+	if err == nil && tag.RowsAffected() == 0 {
+		return users.ErrNotFound
+	}
+	return err
 }
 
 func (s *Store) Get(ctx context.Context, id uuid.UUID) (reminders.Reminder, error) {

@@ -133,6 +133,7 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - CSRF protection
 - Logout
 - FullCalendar month, week, and list views
+- Admin-managed dashboard users with optional Discord user ID links
 - Reminder creation
 - Click-to-cancel reminders
 - Status styling
@@ -152,6 +153,7 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - `internal/dashboard/server.go`: login, sessions, CSRF, API, and calendar UI
 - `migrations/`: human-readable production migrations
 - `internal/database/migrations/`: copies embedded into the Go binary; keep these synchronized with `migrations/`
+- `internal/users/user.go`: admin-managed dashboard user domain
 - `railway.json`: Railway build, health check, and restart settings
 - `Dockerfile`: production container
 - `.github/workflows/ci.yml`: GitHub Actions validation
@@ -196,6 +198,7 @@ git diff --check
 - The UI is intentionally utilitarian and needs visual/design refinement.
 - The dashboard is a single-owner local-account model rather than a full multi-user account system.
 - Dashboard reminder creation currently requires a Discord channel ID.
+- Dashboard-managed users must be linked to a Discord user ID before reminders can ping them.
 - Natural-language tools currently focus on reminder creation; conversational editing, listing, completion, and cancellation can be expanded.
 - Advanced recurrence is deferred.
 - External calendar providers and Discord OAuth are explicitly out of scope.
