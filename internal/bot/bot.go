@@ -259,9 +259,6 @@ func (b *Bot) handleAllReminders(ctx context.Context, i *discordgo.InteractionCr
 		return "Only the bot owner can view all reminders.", nil
 	}
 	statuses := []reminders.Status{reminders.StatusScheduled, reminders.StatusProcessing, reminders.StatusFailed}
-	if optionBool(options, "include_completed") {
-		statuses = nil
-	}
 	items, err := b.store.List(ctx, reminders.ListFilter{From: time.Now().Add(-24 * time.Hour), Statuses: statuses, Limit: 100})
 	if err != nil {
 		return "", err
@@ -507,14 +504,6 @@ func optionString(options []*discordgo.ApplicationCommandInteractionDataOption, 
 	}
 	return ""
 }
-func optionBool(options []*discordgo.ApplicationCommandInteractionDataOption, name string) bool {
-	for _, o := range options {
-		if o.Name == name {
-			return o.BoolValue()
-		}
-	}
-	return false
-}
 func optionUser(s *discordgo.Session, options []*discordgo.ApplicationCommandInteractionDataOption, name string) *discordgo.User {
 	for _, o := range options {
 		if o.Name == name {
@@ -588,16 +577,13 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 	stringOption := func(name, description string, required bool) *discordgo.ApplicationCommandOption {
 		return &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionString, Name: name, Description: description, Required: required}
 	}
-	boolOption := func(name, description string, required bool) *discordgo.ApplicationCommandOption {
-		return &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionBoolean, Name: name, Description: description, Required: required}
-	}
 	userOption := func(name, description string, required bool) *discordgo.ApplicationCommandOption {
 		return &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionUser, Name: name, Description: description, Required: required}
 	}
 	create := &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "create", Description: "Create a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("title", "What to remember", true), stringOption("when", "YYYY-MM-DD HH:MM in the target user's timezone", true), userOption("user", "Discord user to ping", true)}}
 	return []*discordgo.ApplicationCommand{
 		{Name: "remind", Description: "Manage reminders", Options: []*discordgo.ApplicationCommandOption{create, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "list", Description: "List your reminders"}, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "edit", Description: "Edit a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("id", "Reminder ID or prefix", true), stringOption("title", "Updated title", true), stringOption("when", "Updated YYYY-MM-DD HH:MM", true)}}, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "cancel", Description: "Cancel a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("id", "Reminder ID or prefix", true)}}, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "complete", Description: "Complete a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("id", "Reminder ID or prefix", true)}}}},
-		{Name: "reminders", Description: "Owner: list all current reminders", Options: []*discordgo.ApplicationCommandOption{boolOption("include_completed", "Include sent, completed, and cancelled reminders", false)}},
+		{Name: "reminders", Description: "Owner: list all current reminders"},
 		{Name: "todo", Description: "Create a to-do reminder", Options: []*discordgo.ApplicationCommandOption{create}},
 		{Name: "timezone", Description: "Set your timezone", Options: []*discordgo.ApplicationCommandOption{{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "set", Description: "Set an IANA timezone", Options: []*discordgo.ApplicationCommandOption{stringOption("name", "For example America/New_York", true)}}}},
 		{Name: "chat", Description: "Manage AI conversation context", Options: []*discordgo.ApplicationCommandOption{{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "reset", Description: "Reset your context"}}},

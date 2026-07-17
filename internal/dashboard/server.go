@@ -142,6 +142,10 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	from, _ := time.Parse(time.RFC3339, q.Get("start"))
 	to, _ := time.Parse(time.RFC3339, q.Get("end"))
+	if q.Get("past") == "true" {
+		to = time.Now()
+		from = time.Time{}
+	}
 	creator := q.Get("creator_id")
 	if creator == "" {
 		creator = s.ownerID
@@ -434,6 +438,7 @@ button.danger{background:#c0392b}
 <button>Create reminder</button>
 </form>
 <div id="status" class="status"></div>
+<button id="toggle-past" class="secondary" type="button">Show past reminders</button>
 </div>
 </section>
 <section class="card"><div id="calendar"></div></section>
@@ -444,6 +449,7 @@ const csrf='{{CSRF}}';
 const isAdmin={{ADMIN}};
 let users=[];
 let calendar;
+let showPast=false;
 const api=(p,o={})=>{o.headers={...(o.headers||{}),'X-CSRF-Token':csrf};return fetch(p,o)};
 const status=document.getElementById('status');
 function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -478,7 +484,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   const u=selectedUser();
   const creator=u&&u.discord_user_id?u.discord_user_id:'';
   if(!creator){ok([]);return}
-  api('/api/reminders?start='+encodeURIComponent(i.startStr)+'&end='+encodeURIComponent(i.endStr)+'&creator_id='+encodeURIComponent(creator)).then(r=>r.ok?r.json():Promise.reject(Error('Unable to load reminders'))).then(ok).catch(fail)
+  api('/api/reminders?start='+encodeURIComponent(i.startStr)+'&end='+encodeURIComponent(i.endStr)+'&creator_id='+encodeURIComponent(creator)+'&past='+showPast).then(r=>r.ok?r.json():Promise.reject(Error('Unable to load reminders'))).then(ok).catch(fail)
  },eventClick:i=>{if(confirm('Cancel '+i.event.title+'?'))api('/api/reminders/'+i.event.id+'/cancel',{method:'POST'}).then(r=>{if(!r.ok)throw Error('Cancel failed');calendar.refetchEvents()}).catch(e=>status.textContent=e.message)}});
  calendar.render();
  if(!isAdmin)document.getElementById('admin-users').hidden=true;
@@ -486,6 +492,7 @@ document.addEventListener('DOMContentLoaded',()=>{
  sessionAction.textContent=isAdmin?'Sign out':'Admin login';
  sessionAction.onclick=()=>isAdmin?api('/logout',{method:'POST'}).then(()=>location='/'):location='/login';
  document.getElementById('reminder-user').onchange=()=>{const u=selectedUser();if(u)document.getElementById('reminder-timezone').value=u.timezone;calendar.refetchEvents()};
+ document.getElementById('toggle-past').onclick=e=>{showPast=!showPast;e.target.textContent=showPast?'Show current reminders':'Show past reminders';calendar.changeView(showPast?'listMonth':'dayGridMonth');calendar.refetchEvents()};
  document.getElementById('user-create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DisplayName:f.get('display'),DiscordUserID:f.get('discord'),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());e.target.reset();e.target.elements.timezone.value='America/New_York';return loadUsers()}).catch(e=>status.textContent=e.message)};
  document.getElementById('users').onclick=e=>{const btn=e.target.closest('button');if(!btn)return;const row=btn.closest('.user');const id=row.dataset.id;if(btn.dataset.action==='delete'){if(!confirm('Delete this user?'))return;api('/api/users/'+id,{method:'DELETE'}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message);return}const body={DisplayName:row.querySelector('[name=display]').value,DiscordUserID:row.querySelector('[name=discord]').value,Timezone:row.querySelector('[name=timezone]').value};api('/api/users/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message)};
  document.getElementById('create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const u=selectedUser();if(!u||!u.discord_user_id){status.textContent='Choose a linked Discord user.';return}api('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Title:f.get('title'),CreatorID:u.discord_user_id,DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());status.textContent='Reminder created.';e.target.elements.title.value='';calendar.refetchEvents()}).catch(e=>status.textContent=e.message)};

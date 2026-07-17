@@ -138,6 +138,7 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - FullCalendar month, week, and list views
 - Admin-managed dashboard users with optional Discord user ID links
 - Public dashboard calendar and reminder creation; admin login is only required for user create/edit/delete.
+- Dashboard toggle to view past reminders for the selected user.
 - Reminder creation
 - Click-to-cancel reminders
 - Status styling
