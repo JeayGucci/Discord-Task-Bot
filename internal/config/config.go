@@ -44,7 +44,7 @@ func Load() (Config, error) {
 		DiscordGuildID:           os.Getenv("DISCORD_GUILD_ID"),
 		DiscordOwnerID:           os.Getenv("DISCORD_OWNER_ID"),
 		DiscordLogChannelID:      value("DISCORD_LOG_CHANNEL_ID", "1526851837221671043"),
-		DiscordReminderChannelID: value("DISCORD_REMINDER_CHANNEL_ID", "1526792654044532756"),
+		DiscordReminderChannelID: value("DISCORD_REMINDER_CHANNEL_ID", "1527575459595026513"),
 		DiscordRegisterCommands:  boolean("DISCORD_REGISTER_COMMANDS", os.Getenv("APP_ENV") != "production"),
 		DiscordStreamURL:         os.Getenv("DISCORD_STREAM_URL"),
 		OpenAIAPIKey:             os.Getenv("OPENAI_API_KEY"),
