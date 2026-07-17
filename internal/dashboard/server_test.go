@@ -19,7 +19,7 @@ import (
 type fakeStore struct{}
 
 func (fakeStore) Create(context.Context, reminders.CreateParams) (reminders.Reminder, error) {
-	return reminders.Reminder{}, errors.New("unused")
+	return reminders.Reminder{ID: uuid.New(), Title: "Created", CreatorID: "target", ChannelID: "fixed", DeliveryAt: time.Now().Add(time.Hour), Timezone: "UTC", Status: reminders.StatusScheduled}, nil
 }
 func (fakeStore) List(context.Context, reminders.ListFilter) ([]reminders.Reminder, error) {
 	return []reminders.Reminder{}, nil
@@ -79,13 +79,13 @@ func (f *fakeSessions) DeleteDashboardSession(context.Context, []byte) error { r
 
 func TestLoginAndAuthenticatedAPI(t *testing.T) {
 	sessions := &fakeSessions{}
-	s := New(fakeStore{}, fakeStore{}, sessions, "admin", "", "correct horse", "owner", "UTC", slog.Default())
+	s := New(fakeStore{}, fakeStore{}, sessions, "admin", "", "correct horse", "owner", "fixed-channel", "UTC", slog.Default())
 	handler := s.Handler()
 	req := httptest.NewRequest(http.MethodGet, "/api/reminders", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated status=%d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public reminders status=%d", rec.Code)
 	}
 	form := url.Values{"username": {"admin"}, "password": {"correct horse"}}
 	req = httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
@@ -110,7 +110,7 @@ func TestLoginAndAuthenticatedAPI(t *testing.T) {
 }
 
 func TestInvalidLogin(t *testing.T) {
-	s := New(fakeStore{}, fakeStore{}, &fakeSessions{}, "admin", "", "right", "owner", "UTC", slog.Default())
+	s := New(fakeStore{}, fakeStore{}, &fakeSessions{}, "admin", "", "right", "owner", "fixed-channel", "UTC", slog.Default())
 	form := url.Values{"username": {"admin"}, "password": {"wrong"}}
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -123,7 +123,7 @@ func TestInvalidLogin(t *testing.T) {
 
 func TestAuthenticatedUserAPI(t *testing.T) {
 	sessions := &fakeSessions{hash: hashToken("token"), username: "admin", csrf: "csrf", expires: time.Now().Add(time.Hour)}
-	s := New(fakeStore{}, fakeStore{}, sessions, "admin", "", "right", "owner", "UTC", slog.Default())
+	s := New(fakeStore{}, fakeStore{}, sessions, "admin", "", "right", "owner", "fixed-channel", "UTC", slog.Default())
 	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
 	req.AddCookie(&http.Cookie{Name: "taskbot_session", Value: "token"})
 	rec := httptest.NewRecorder()
@@ -138,5 +138,15 @@ func TestAuthenticatedUserAPI(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create user status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPublicReminderCreate(t *testing.T) {
+	s := New(fakeStore{}, fakeStore{}, &fakeSessions{}, "admin", "", "right", "owner", "fixed-channel", "UTC", slog.Default())
+	req := httptest.NewRequest(http.MethodPost, "/api/reminders", strings.NewReader(`{"Title":"Public","CreatorID":"target","DeliveryAt":"2030-01-01T12:00:00Z","Timezone":"UTC"}`))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("public create status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

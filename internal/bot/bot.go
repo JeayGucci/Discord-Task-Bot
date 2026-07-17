@@ -17,32 +17,33 @@ import (
 )
 
 type Bot struct {
-	session      *discordgo.Session
-	store        reminders.Store
-	ai           *ai.Client
-	appID        string
-	guildID      string
-	ownerID      string
-	logChannelID string
-	streamURL    string
-	dashboardURL string
-	logger       *slog.Logger
-	commands     []*discordgo.ApplicationCommand
-	auditMu      sync.Mutex
-	auditWindow  time.Time
-	auditSent    int
-	auditDropped int
-	reminderMu   sync.Mutex
-	nextReminder time.Time
+	session           *discordgo.Session
+	store             reminders.Store
+	ai                *ai.Client
+	appID             string
+	guildID           string
+	ownerID           string
+	logChannelID      string
+	reminderChannelID string
+	streamURL         string
+	dashboardURL      string
+	logger            *slog.Logger
+	commands          []*discordgo.ApplicationCommand
+	auditMu           sync.Mutex
+	auditWindow       time.Time
+	auditSent         int
+	auditDropped      int
+	reminderMu        sync.Mutex
+	nextReminder      time.Time
 }
 
-func New(token, appID, guildID, ownerID, logChannelID, streamURL, dashboardURL string, store reminders.Store, aiClient *ai.Client, logger *slog.Logger) (*Bot, error) {
+func New(token, appID, guildID, ownerID, logChannelID, reminderChannelID, streamURL, dashboardURL string, store reminders.Store, aiClient *ai.Client, logger *slog.Logger) (*Bot, error) {
 	s, err := discordgo.New("Bot " + token)
 	if err != nil {
 		return nil, err
 	}
 	s.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentMessageContent
-	b := &Bot{session: s, store: store, ai: aiClient, appID: appID, guildID: guildID, ownerID: ownerID, logChannelID: logChannelID, streamURL: streamURL, dashboardURL: dashboardURL, logger: logger, commands: commandDefinitions()}
+	b := &Bot{session: s, store: store, ai: aiClient, appID: appID, guildID: guildID, ownerID: ownerID, logChannelID: logChannelID, reminderChannelID: reminderChannelID, streamURL: streamURL, dashboardURL: dashboardURL, logger: logger, commands: commandDefinitions()}
 	s.AddHandler(b.onInteraction)
 	s.AddHandler(b.onMessage)
 	return b, nil
@@ -86,13 +87,21 @@ func (b *Bot) SendReminder(ctx context.Context, r reminders.Reminder) (string, e
 		return "", err
 	}
 	content := strings.TrimSpace(r.MentionTarget + " Reminder: **" + r.Title + "**")
-	message, err := b.session.ChannelMessageSend(r.ChannelID, content)
+	channelID := b.reminderChannel(r.ChannelID)
+	message, err := b.session.ChannelMessageSend(channelID, content)
 	if err != nil {
-		b.audit(fmt.Sprintf("❌ Reminder delivery failed · `%s` · channel <#%s>", r.ID.String()[:8], r.ChannelID))
+		b.audit(fmt.Sprintf("❌ Reminder delivery failed · `%s` · channel <#%s>", r.ID.String()[:8], channelID))
 		return "", err
 	}
-	b.audit(fmt.Sprintf("🔔 Reminder delivered · `%s` · channel <#%s>", r.ID.String()[:8], r.ChannelID))
+	b.audit(fmt.Sprintf("🔔 Reminder delivered · `%s` · channel <#%s>", r.ID.String()[:8], channelID))
 	return message.ID, nil
+}
+
+func (b *Bot) reminderChannel(fallback string) string {
+	if strings.TrimSpace(b.reminderChannelID) != "" {
+		return b.reminderChannelID
+	}
+	return fallback
 }
 
 func (b *Bot) waitForReminderSlot(ctx context.Context) error {
@@ -242,8 +251,11 @@ func (b *Bot) handleRemind(ctx context.Context, i *discordgo.InteractionCreate, 
 }
 
 func (b *Bot) createFromOptions(ctx context.Context, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) (string, error) {
-	user := interactionUser(i)
-	timezone, err := b.store.GetTimezone(ctx, user.ID, i.GuildID)
+	target := optionUser(b.session, options, "user")
+	if target == nil {
+		return "", errors.New("choose the Discord user to ping")
+	}
+	timezone, err := b.store.GetTimezone(ctx, target.ID, i.GuildID)
 	if err != nil {
 		return "", err
 	}
@@ -251,7 +263,8 @@ func (b *Bot) createFromOptions(ctx context.Context, i *discordgo.InteractionCre
 	if err != nil {
 		return "", err
 	}
-	r, err := b.store.Create(ctx, reminders.CreateParams{Title: optionString(options, "title"), CreatorID: user.ID, GuildID: i.GuildID, ChannelID: i.ChannelID, MentionTarget: "<@" + user.ID + ">", DeliveryAt: delivery, Timezone: timezone})
+	channelID := b.reminderChannel(i.ChannelID)
+	r, err := b.store.Create(ctx, reminders.CreateParams{Title: optionString(options, "title"), CreatorID: target.ID, GuildID: i.GuildID, ChannelID: channelID, MentionTarget: "<@" + target.ID + ">", DeliveryAt: delivery, Timezone: timezone})
 	if err != nil {
 		return "", err
 	}
@@ -259,13 +272,13 @@ func (b *Bot) createFromOptions(ctx context.Context, i *discordgo.InteractionCre
 		"slash reminder created",
 		"reminder_id", r.ID,
 		"title", r.Title,
-		"user_id", user.ID,
+		"user_id", target.ID,
 		"guild_id", i.GuildID,
-		"channel_id", i.ChannelID,
+		"channel_id", channelID,
 		"delivery_at", r.DeliveryAt,
 		"timezone", r.Timezone,
 	)
-	return fmt.Sprintf("Created **%s** for <t:%d:F>. ID: `%s`", r.Title, r.DeliveryAt.Unix(), r.ID.String()[:8]), nil
+	return fmt.Sprintf("Created **%s** for <@%s> at <t:%d:F>. ID: `%s`", r.Title, target.ID, r.DeliveryAt.Unix(), r.ID.String()[:8]), nil
 }
 
 func (b *Bot) handleTimezone(ctx context.Context, userID string, options []*discordgo.ApplicationCommandInteractionDataOption) (string, error) {
@@ -357,7 +370,8 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		b.reply(m, "I need an exact date and time before creating that reminder.")
 		return
 	}
-	r, err := b.store.Create(ctx, reminders.CreateParams{Title: args.Title, Description: args.Description, CreatorID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID, MentionTarget: "<@" + m.Author.ID + ">", DeliveryAt: delivery, Timezone: timezone})
+	channelID := b.reminderChannel(m.ChannelID)
+	r, err := b.store.Create(ctx, reminders.CreateParams{Title: args.Title, Description: args.Description, CreatorID: m.Author.ID, GuildID: m.GuildID, ChannelID: channelID, MentionTarget: "<@" + m.Author.ID + ">", DeliveryAt: delivery, Timezone: timezone})
 	if err != nil {
 		b.logger.Error("AI reminder creation failed", "error", err, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID)
 		b.reply(m, "I couldn't create that reminder: "+err.Error())
@@ -369,7 +383,7 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		"title", r.Title,
 		"user_id", m.Author.ID,
 		"guild_id", m.GuildID,
-		"channel_id", m.ChannelID,
+		"channel_id", channelID,
 		"delivery_at", r.DeliveryAt,
 		"timezone", r.Timezone,
 	)
@@ -467,6 +481,14 @@ func optionString(options []*discordgo.ApplicationCommandInteractionDataOption, 
 	}
 	return ""
 }
+func optionUser(s *discordgo.Session, options []*discordgo.ApplicationCommandInteractionDataOption, name string) *discordgo.User {
+	for _, o := range options {
+		if o.Name == name {
+			return o.UserValue(s)
+		}
+	}
+	return nil
+}
 func truncate(s string, max int) string {
 	r := []rune(s)
 	if len(r) > max {
@@ -532,7 +554,10 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 	stringOption := func(name, description string, required bool) *discordgo.ApplicationCommandOption {
 		return &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionString, Name: name, Description: description, Required: required}
 	}
-	create := &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "create", Description: "Create a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("title", "What to remember", true), stringOption("when", "YYYY-MM-DD HH:MM in your timezone", true)}}
+	userOption := func(name, description string, required bool) *discordgo.ApplicationCommandOption {
+		return &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionUser, Name: name, Description: description, Required: required}
+	}
+	create := &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "create", Description: "Create a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("title", "What to remember", true), stringOption("when", "YYYY-MM-DD HH:MM in the target user's timezone", true), userOption("user", "Discord user to ping", true)}}
 	return []*discordgo.ApplicationCommand{
 		{Name: "remind", Description: "Manage reminders", Options: []*discordgo.ApplicationCommandOption{create, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "list", Description: "List your reminders"}, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "edit", Description: "Edit a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("id", "Reminder ID or prefix", true), stringOption("title", "Updated title", true), stringOption("when", "Updated YYYY-MM-DD HH:MM", true)}}, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "cancel", Description: "Cancel a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("id", "Reminder ID or prefix", true)}}, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "complete", Description: "Complete a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("id", "Reminder ID or prefix", true)}}}},
 		{Name: "todo", Description: "Create a to-do reminder", Options: []*discordgo.ApplicationCommandOption{create}},

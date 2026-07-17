@@ -45,7 +45,7 @@ func run(logger *slog.Logger) error {
 	openAI := ai.New(cfg.OpenAIAPIKey, cfg.OpenAIModel, cfg.OpenAIBaseURL)
 	var discordBot *bot.Bot
 	if cfg.DiscordToken != "" {
-		discordBot, err = bot.New(cfg.DiscordToken, cfg.DiscordAppID, cfg.DiscordGuildID, cfg.DiscordOwnerID, cfg.DiscordLogChannelID, cfg.DiscordStreamURL, cfg.DashboardBaseURL, store, openAI, logger)
+		discordBot, err = bot.New(cfg.DiscordToken, cfg.DiscordAppID, cfg.DiscordGuildID, cfg.DiscordOwnerID, cfg.DiscordLogChannelID, cfg.DiscordReminderChannelID, cfg.DiscordStreamURL, cfg.DashboardBaseURL, store, openAI, logger)
 		if err != nil {
 			return err
 		}
@@ -58,7 +58,7 @@ func run(logger *slog.Logger) error {
 		logger.Warn("Discord is not configured; bot and scheduler are disabled")
 	}
 
-	server := &http.Server{Addr: cfg.Address(), Handler: dashboard.New(store, store, store, cfg.DashboardUsername, cfg.DashboardPasswordHash, cfg.DashboardPassword, cfg.DiscordOwnerID, cfg.DefaultTimezone, logger).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: cfg.Address(), Handler: dashboard.New(store, store, store, cfg.DashboardUsername, cfg.DashboardPasswordHash, cfg.DashboardPassword, cfg.DiscordOwnerID, cfg.DiscordReminderChannelID, cfg.DefaultTimezone, logger).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	errCh := make(chan error, 1)
 	go func() { logger.Info("dashboard listening", "address", cfg.Address()); errCh <- server.ListenAndServe() }()
 	select {

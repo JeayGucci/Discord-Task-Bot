@@ -32,24 +32,25 @@ type UserStore interface {
 }
 
 type Server struct {
-	store           reminders.Store
-	users           UserStore
-	db              Pinger
-	sessions        SessionStore
-	username        string
-	passwordHash    []byte
-	ownerID         string
-	defaultTimezone string
-	logger          *slog.Logger
+	store             reminders.Store
+	users             UserStore
+	db                Pinger
+	sessions          SessionStore
+	username          string
+	passwordHash      []byte
+	ownerID           string
+	reminderChannelID string
+	defaultTimezone   string
+	logger            *slog.Logger
 }
 
-func New(store reminders.Store, db Pinger, sessions SessionStore, username, passwordHash, password, ownerID, defaultTimezone string, logger *slog.Logger) *Server {
+func New(store reminders.Store, db Pinger, sessions SessionStore, username, passwordHash, password, ownerID, reminderChannelID, defaultTimezone string, logger *slog.Logger) *Server {
 	hash := []byte(passwordHash)
 	if len(hash) == 0 && password != "" {
 		hash, _ = bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	}
 	userStore, _ := store.(UserStore)
-	return &Server{store: store, users: userStore, db: db, sessions: sessions, username: username, passwordHash: hash, ownerID: ownerID, defaultTimezone: defaultTimezone, logger: logger}
+	return &Server{store: store, users: userStore, db: db, sessions: sessions, username: username, passwordHash: hash, ownerID: ownerID, reminderChannelID: reminderChannelID, defaultTimezone: defaultTimezone, logger: logger}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -61,11 +62,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.auth(s.logout))
-	mux.HandleFunc("GET /", s.auth(s.index))
-	mux.HandleFunc("GET /api/reminders", s.auth(s.list))
-	mux.HandleFunc("POST /api/reminders", s.auth(s.create))
+	mux.HandleFunc("GET /", s.index)
+	mux.HandleFunc("GET /api/reminders", s.list)
+	mux.HandleFunc("POST /api/reminders", s.create)
 	mux.HandleFunc("POST /api/reminders/{id}/cancel", s.auth(s.cancel))
-	mux.HandleFunc("GET /api/users", s.auth(s.listUsers))
+	mux.HandleFunc("GET /api/users", s.listUsers)
 	mux.HandleFunc("POST /api/users", s.auth(s.createUser))
 	mux.HandleFunc("PUT /api/users/{id}", s.auth(s.updateUser))
 	mux.HandleFunc("DELETE /api/users/{id}", s.auth(s.deleteUser))
@@ -127,11 +128,14 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	_, csrf, _, err := s.currentSession(r)
 	if err != nil {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
+		csrf = ""
+	}
+	admin := "false"
+	if csrf != "" {
+		admin = "true"
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(indexHTMLPage(csrf)))
+	_, _ = w.Write([]byte(indexHTMLPage(csrf, admin)))
 }
 
 func (s *Server) list(w http.ResponseWriter, r *http.Request) {
@@ -161,17 +165,19 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, events)
 }
 func (s *Server) create(w http.ResponseWriter, r *http.Request) {
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid CSRF token", 403)
-		return
-	}
-	var in struct{ Title, Description, CreatorID, GuildID, ChannelID, MentionTarget, DeliveryAt, Timezone string }
+	var in struct{ Title, Description, CreatorID, GuildID, MentionTarget, DeliveryAt, Timezone string }
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&in) != nil {
 		http.Error(w, "invalid JSON", 400)
 		return
 	}
 	if in.CreatorID == "" {
-		in.CreatorID = s.ownerID
+		http.Error(w, "choose a linked Discord user to ping", 400)
+		return
+	}
+	channelID := strings.TrimSpace(s.reminderChannelID)
+	if channelID == "" {
+		http.Error(w, "reminder channel is not configured", 500)
+		return
 	}
 	if in.MentionTarget == "" && in.CreatorID != "" {
 		in.MentionTarget = "<@" + in.CreatorID + ">"
@@ -184,12 +190,12 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delivery_at must be RFC3339", 400)
 		return
 	}
-	item, err := s.store.Create(r.Context(), reminders.CreateParams{Title: in.Title, Description: in.Description, CreatorID: in.CreatorID, GuildID: in.GuildID, ChannelID: in.ChannelID, MentionTarget: in.MentionTarget, DeliveryAt: delivery, Timezone: in.Timezone})
+	item, err := s.store.Create(r.Context(), reminders.CreateParams{Title: in.Title, Description: in.Description, CreatorID: in.CreatorID, GuildID: in.GuildID, ChannelID: channelID, MentionTarget: in.MentionTarget, DeliveryAt: delivery, Timezone: in.Timezone})
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	s.logger.Info("dashboard reminder created", "reminder_id", item.ID, "title", item.Title, "creator_id", item.CreatorID, "guild_id", item.GuildID, "channel_id", item.ChannelID, "delivery_at", item.DeliveryAt)
+	s.logger.Info("dashboard reminder created", "reminder_id", item.ID, "title", item.Title, "creator_id", item.CreatorID, "guild_id", item.GuildID, "channel_id", channelID, "delivery_at", item.DeliveryAt)
 	writeJSON(w, 201, item)
 }
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
@@ -366,7 +372,10 @@ func requestLogger(l *slog.Logger, next http.Handler) http.Handler {
 	})
 }
 
-func indexHTMLPage(csrf string) string { return strings.ReplaceAll(adminHTML, "{{CSRF}}", csrf) }
+func indexHTMLPage(csrf, admin string) string {
+	page := strings.ReplaceAll(adminHTML, "{{CSRF}}", csrf)
+	return strings.ReplaceAll(page, "{{ADMIN}}", admin)
+}
 
 const loginHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TaskBot Login</title><style>body{font-family:system-ui;background:#f4f6fa;display:grid;place-items:center;min-height:100vh;margin:0}.card{background:white;padding:32px;border-radius:12px;box-shadow:0 3px 18px #17203320;width:min(360px,calc(100% - 48px))}input,button{box-sizing:border-box;width:100%;padding:11px;margin:7px 0;border:1px solid #ccd2df;border-radius:7px;font:inherit}button{background:#5865f2;color:white;border:0}</style></head><body><form class="card" method="post" action="/login"><h1>TaskBot</h1><p>Sign in to your private calendar.</p><input name="username" autocomplete="username" placeholder="Username" required autofocus><input name="password" type="password" autocomplete="current-password" placeholder="Password" required><button>Sign in</button></form></body></html>`
 const adminHTML = `<!doctype html>
@@ -401,11 +410,11 @@ button.danger{background:#c0392b}
 </style>
 </head>
 <body>
-<header><h1>TaskBot Admin</h1><button id="logout">Sign out</button></header>
+<header><h1>TaskBot Dashboard</h1><button id="session-action">Admin login</button></header>
 <main>
 <div class="grid">
 <section>
-<div class="card">
+<div class="card" id="admin-users">
 <h2>Managed Users</h2>
 <form id="user-create">
 <input name="display" placeholder="Display name" maxlength="100" required>
@@ -420,8 +429,7 @@ button.danger{background:#c0392b}
 <form id="create">
 <input name="title" placeholder="Reminder title" maxlength="200" required>
 <input name="delivery" type="datetime-local" required>
-<select name="user" id="reminder-user"></select>
-<input name="channel" placeholder="Discord channel ID" required>
+<select name="user" id="reminder-user" required></select>
 <input name="timezone" id="reminder-timezone" value="America/New_York" required>
 <button>Create reminder</button>
 </form>
@@ -433,6 +441,7 @@ button.danger{background:#c0392b}
 </main>
 <script>
 const csrf='{{CSRF}}';
+const isAdmin={{ADMIN}};
 let users=[];
 let calendar;
 const api=(p,o={})=>{o.headers={...(o.headers||{}),'X-CSRF-Token':csrf};return fetch(p,o)};
@@ -442,7 +451,7 @@ function selectedUser(){return users.find(u=>u.id===document.getElementById('rem
 function refreshReminderUser(){
  const select=document.getElementById('reminder-user');
  const previous=select.value;
- select.innerHTML='<option value="">Owner default</option>'+users.filter(u=>u.discord_user_id).map(u=>'<option value="'+esc(u.id)+'">'+esc(u.display_name)+' ('+esc(u.discord_user_id)+')</option>').join('');
+ select.innerHTML='<option value="">Choose user to ping</option>'+users.filter(u=>u.discord_user_id).map(u=>'<option value="'+esc(u.id)+'">'+esc(u.display_name)+' ('+esc(u.discord_user_id)+')</option>').join('');
  if([...select.options].some(o=>o.value===previous))select.value=previous;
  const u=selectedUser();
  if(u)document.getElementById('reminder-timezone').value=u.timezone;
@@ -468,17 +477,20 @@ document.addEventListener('DOMContentLoaded',()=>{
  calendar=new FullCalendar.Calendar(document.getElementById('calendar'),{initialView:'dayGridMonth',headerToolbar:{left:'prev,next today',center:'title',right:'dayGridMonth,timeGridWeek,listMonth'},events:(i,ok,fail)=>{
   const u=selectedUser();
   const creator=u&&u.discord_user_id?u.discord_user_id:'';
+  if(!creator){ok([]);return}
   api('/api/reminders?start='+encodeURIComponent(i.startStr)+'&end='+encodeURIComponent(i.endStr)+'&creator_id='+encodeURIComponent(creator)).then(r=>r.ok?r.json():Promise.reject(Error('Unable to load reminders'))).then(ok).catch(fail)
  },eventClick:i=>{if(confirm('Cancel '+i.event.title+'?'))api('/api/reminders/'+i.event.id+'/cancel',{method:'POST'}).then(r=>{if(!r.ok)throw Error('Cancel failed');calendar.refetchEvents()}).catch(e=>status.textContent=e.message)}});
  calendar.render();
- document.getElementById('logout').onclick=()=>api('/logout',{method:'POST'}).then(()=>location='/login');
+ if(!isAdmin)document.getElementById('admin-users').hidden=true;
+ const sessionAction=document.getElementById('session-action');
+ sessionAction.textContent=isAdmin?'Sign out':'Admin login';
+ sessionAction.onclick=()=>isAdmin?api('/logout',{method:'POST'}).then(()=>location='/'):location='/login';
  document.getElementById('reminder-user').onchange=()=>{const u=selectedUser();if(u)document.getElementById('reminder-timezone').value=u.timezone;calendar.refetchEvents()};
  document.getElementById('user-create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DisplayName:f.get('display'),DiscordUserID:f.get('discord'),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());e.target.reset();e.target.elements.timezone.value='America/New_York';return loadUsers()}).catch(e=>status.textContent=e.message)};
  document.getElementById('users').onclick=e=>{const btn=e.target.closest('button');if(!btn)return;const row=btn.closest('.user');const id=row.dataset.id;if(btn.dataset.action==='delete'){if(!confirm('Delete this user?'))return;api('/api/users/'+id,{method:'DELETE'}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message);return}const body={DisplayName:row.querySelector('[name=display]').value,DiscordUserID:row.querySelector('[name=discord]').value,Timezone:row.querySelector('[name=timezone]').value};api('/api/users/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message)};
- document.getElementById('create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const u=selectedUser();const creator=u&&u.discord_user_id?u.discord_user_id:'';api('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Title:f.get('title'),CreatorID:creator,ChannelID:f.get('channel'),DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());status.textContent='Reminder created.';e.target.elements.title.value='';calendar.refetchEvents()}).catch(e=>status.textContent=e.message)};
+ document.getElementById('create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const u=selectedUser();if(!u||!u.discord_user_id){status.textContent='Choose a linked Discord user.';return}api('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Title:f.get('title'),CreatorID:u.discord_user_id,DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());status.textContent='Reminder created.';e.target.elements.title.value='';calendar.refetchEvents()}).catch(e=>status.textContent=e.message)};
  loadUsers().catch(e=>status.textContent=e.message);
 });
 </script>
 </body>
 </html>`
-const indexHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TaskBot Calendar</title><script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.18/index.global.min.js"></script><style>body{font-family:system-ui;margin:0;background:#f4f6fa;color:#172033}header{padding:20px 28px;background:#5865f2;color:white;display:flex;justify-content:space-between;align-items:center}main{max-width:1100px;margin:24px auto;padding:0 20px}.card{background:white;padding:20px;border-radius:12px;box-shadow:0 3px 18px #17203315;margin-bottom:20px}form{display:grid;grid-template-columns:2fr 1.5fr 1.5fr 1fr auto;gap:10px}input,button{font:inherit;padding:10px;border:1px solid #ccd2df;border-radius:7px}button{background:#5865f2;color:white;border:0;cursor:pointer}.status{min-height:24px}.status-completed,.status-sent{opacity:.65}.status-failed{background:#c0392b!important}.status-cancelled{text-decoration:line-through;opacity:.5}@media(max-width:800px){form{grid-template-columns:1fr}}</style></head><body><header><h1>TaskBot Calendar</h1><button id="logout">Sign out</button></header><main><div class="card"><h2>Create reminder</h2><form id="create"><input name="title" placeholder="Reminder title" maxlength="200" required><input name="delivery" type="datetime-local" required><input name="channel" placeholder="Discord channel ID" required><input name="timezone" value="America/New_York" required><button>Create</button></form><div id="status" class="status"></div></div><div class="card"><div id="calendar"></div></div></main><script>const csrf='{{CSRF}}';const api=(p,o={})=>{o.headers={...(o.headers||{}),'X-CSRF-Token':csrf};return fetch(p,o)};document.addEventListener('DOMContentLoaded',()=>{const status=document.getElementById('status');const c=new FullCalendar.Calendar(document.getElementById('calendar'),{initialView:'dayGridMonth',headerToolbar:{left:'prev,next today',center:'title',right:'dayGridMonth,timeGridWeek,listMonth'},events:(i,ok,fail)=>api('/api/reminders?start='+encodeURIComponent(i.startStr)+'&end='+encodeURIComponent(i.endStr)).then(r=>r.ok?r.json():Promise.reject(Error('Unable to load reminders'))).then(ok).catch(fail),eventClick:i=>{if(confirm('Cancel '+i.event.title+'?'))api('/api/reminders/'+i.event.id+'/cancel',{method:'POST'}).then(r=>{if(!r.ok)throw Error('Cancel failed');c.refetchEvents()}).catch(e=>status.textContent=e.message)}});c.render();document.getElementById('logout').onclick=()=>api('/logout',{method:'POST'}).then(()=>location='/login');document.getElementById('create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);api('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Title:f.get('title'),ChannelID:f.get('channel'),DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());status.textContent='Reminder created.';e.target.elements.title.value='';c.refetchEvents()}).catch(e=>status.textContent=e.message)}});</script></body></html>`

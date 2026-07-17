@@ -64,6 +64,7 @@ DISCORD_APPLICATION_ID=1526848626150871112
 DISCORD_GUILD_ID=1526434983823278202
 DISCORD_OWNER_ID=953631701056229426
 DISCORD_LOG_CHANNEL_ID=1526851837221671043
+DISCORD_REMINDER_CHANNEL_ID=1526792654044532756
 DISCORD_REGISTER_COMMANDS=false
 DISCORD_STREAM_URL=https://twitch.tv/your-channel
 OPENAI_API_KEY=SEALED_IN_RAILWAY
@@ -100,6 +101,7 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - Production command registration is opt-in through `DISCORD_REGISTER_COMMANDS=true`; leave it disabled for normal deploys.
 - Streaming activity configured through `DISCORD_STREAM_URL`
 - `/dashboard` command that returns the configured TaskBot dashboard URL
+- Slash reminder creation asks for the Discord user to ping; reminder delivery goes to `DISCORD_REMINDER_CHANNEL_ID`.
 - Privacy-conscious operational audit messages
 - Local throttling for Discord audit messages to avoid bursty REST calls
 - Structured Railway/stdout logs for AI responses, AI tool actions, slash commands, and reminder delivery
@@ -134,6 +136,7 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - Logout
 - FullCalendar month, week, and list views
 - Admin-managed dashboard users with optional Discord user ID links
+- Public dashboard calendar and reminder creation; admin login is only required for user create/edit/delete.
 - Reminder creation
 - Click-to-cancel reminders
 - Status styling
@@ -197,7 +200,7 @@ git diff --check
 
 - The UI is intentionally utilitarian and needs visual/design refinement.
 - The dashboard is a single-owner local-account model rather than a full multi-user account system.
-- Dashboard reminder creation currently requires a Discord channel ID.
+- Dashboard reminder creation uses the fixed reminder channel and a user dropdown.
 - Dashboard-managed users must be linked to a Discord user ID before reminders can ping them.
 - Natural-language tools currently focus on reminder creation; conversational editing, listing, completion, and cancellation can be expanded.
 - Advanced recurrence is deferred.

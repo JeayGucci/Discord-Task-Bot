@@ -15,8 +15,10 @@ The authoritative product and architecture plan is in [plan.md](plan.md).
 - Transactional due-reminder claiming, retry backoff, and duplicate-delivery records.
 - Local-login calendar dashboard and session-protected reminder API.
 - Admin-managed dashboard users with optional Discord ID linking.
+- Public dashboard calendar/reminder creation using a managed-user dropdown.
 - Health and readiness checks for Railway.
 - Privacy-conscious operational audit messages in a configured Discord channel.
+- Reminder pings are delivered to the fixed `DISCORD_REMINDER_CHANNEL_ID` channel.
 - Discord streaming presence labeled “Streamlining your tasks”.
 - `/dashboard` command that returns the private dashboard URL.
 - Docker, local PostgreSQL, and GitHub Actions CI.
@@ -45,9 +47,10 @@ The service applies versioned SQL migrations at startup. If Discord credentials 
 5. Set `DISCORD_BOT_TOKEN` and `DISCORD_APPLICATION_ID`.
 6. During development, set `DISCORD_GUILD_ID` to a private test server for immediate command updates.
 7. Set `DISCORD_OWNER_ID` to your user ID to keep the initial bot private.
-8. `DISCORD_REGISTER_COMMANDS` defaults to enabled outside production and disabled in production. Temporarily set it to `true` in production only when slash command definitions need to be pushed, then turn it back off.
-9. Set `DISCORD_STREAM_URL` to a Twitch or YouTube URL if you want the bot to show a streaming presence. Discord does not render arbitrary URLs as streaming.
-10. Put `DASHBOARD_BASE_URL` in the bot profile description in the Developer Portal if you want it visible on the bot profile.
+8. Set `DISCORD_REMINDER_CHANNEL_ID` to the channel where reminders should ping.
+9. `DISCORD_REGISTER_COMMANDS` defaults to enabled outside production and disabled in production. Temporarily set it to `true` in production only when slash command definitions need to be pushed, then turn it back off.
+10. Set `DISCORD_STREAM_URL` to a Twitch or YouTube URL if you want the bot to show a streaming presence. Discord does not render arbitrary URLs as streaming.
+11. Put `DASHBOARD_BASE_URL` in the bot profile description in the Developer Portal if you want it visible on the bot profile.
 
 ## Railway deployment
 
@@ -63,16 +66,17 @@ The service applies versioned SQL migrations at startup. If Discord credentials 
 Do not commit `.env`, Discord tokens, OpenAI keys, or production database URLs.
 
 The dashboard login remains a single admin account. From the dashboard, the admin can create managed users, optionally link each one to a Discord user ID, and create reminders for linked Discord users.
+Viewing the calendar and creating reminders from the dashboard do not require login; only user create/edit/delete actions require the admin account.
 
 ## Commands
 
 ```text
-/remind create title:Finish SOAP note when:2026-07-18 16:00
+/remind create title:Finish SOAP note when:2026-07-18 16:00 user:@User
 /remind list
 /remind edit id:abcd1234 title:Finish SOAP note when:2026-07-18 18:00
 /remind cancel id:abcd1234
 /remind complete id:abcd1234
-/todo create title:Prepare notes when:2026-07-18 16:00
+/todo create title:Prepare notes when:2026-07-18 16:00 user:@User
 /timezone set name:America/New_York
 /chat reset
 /dashboard
