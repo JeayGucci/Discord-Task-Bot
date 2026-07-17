@@ -45,7 +45,7 @@ func run(logger *slog.Logger) error {
 	openAI := ai.New(cfg.OpenAIAPIKey, cfg.OpenAIModel, cfg.OpenAIBaseURL)
 	var discordBot *bot.Bot
 	if cfg.DiscordToken != "" {
-		discordBot, err = bot.New(cfg.DiscordToken, cfg.DiscordAppID, cfg.DiscordGuildID, cfg.DiscordOwnerID, cfg.DiscordLogChannelID, cfg.DashboardBaseURL, store, openAI, logger)
+		discordBot, err = bot.New(cfg.DiscordToken, cfg.DiscordAppID, cfg.DiscordGuildID, cfg.DiscordOwnerID, cfg.DiscordLogChannelID, cfg.DiscordStreamURL, cfg.DashboardBaseURL, store, openAI, logger)
 		if err != nil {
 			return err
 		}

@@ -36,7 +36,7 @@ At the end of the original implementation session, GitHub CI passed, `/healthz` 
 13. Dashboard sessions are server-side, expire after 24 hours, use `HttpOnly`/`SameSite=Strict` cookies, and require CSRF tokens for mutations.
 14. The application uses `DATABASE_PUBLIC_URL` everywhere, not `DATABASE_URL`.
 15. Operational Discord audit logs go to channel `1526851837221671043`.
-16. The bot uses a streaming presence labeled `Streamlining your tasks`, linked to the configured dashboard URL.
+16. The bot uses a streaming presence labeled `Streamlining your tasks`; Discord only renders streaming presence for Twitch or YouTube URLs, configured with `DISCORD_STREAM_URL`.
 17. Functional behavior was prioritized over visual design. UI fine-tuning comes later.
 
 ## Discord identifiers
@@ -65,6 +65,7 @@ DISCORD_GUILD_ID=1526434983823278202
 DISCORD_OWNER_ID=953631701056229426
 DISCORD_LOG_CHANNEL_ID=1526851837221671043
 DISCORD_REGISTER_COMMANDS=false
+DISCORD_STREAM_URL=https://twitch.tv/your-channel
 OPENAI_API_KEY=SEALED_IN_RAILWAY
 OPENAI_CHAT_MODEL=gpt-5-nano
 OPENAI_BASE_URL=https://api.openai.com/v1
@@ -97,9 +98,11 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - Owner allowlisting through `DISCORD_OWNER_ID`
 - Guild-scoped command registration during development/initial deployment
 - Production command registration is opt-in through `DISCORD_REGISTER_COMMANDS=true`; leave it disabled for normal deploys.
-- Streaming activity linked to the web dashboard
+- Streaming activity configured through `DISCORD_STREAM_URL`
+- `/dashboard` command that returns the configured TaskBot dashboard URL
 - Privacy-conscious operational audit messages
 - Local throttling for Discord audit messages to avoid bursty REST calls
+- Structured Railway/stdout logs for AI responses, AI tool actions, slash commands, and reminder delivery
 
 ### Reminder delivery
 
@@ -196,7 +199,7 @@ git diff --check
 - Natural-language tools currently focus on reminder creation; conversational editing, listing, completion, and cancellation can be expanded.
 - Advanced recurrence is deferred.
 - External calendar providers and Discord OAuth are explicitly out of scope.
-- A Discord “streaming” presence may be rendered differently by Discord clients when the URL is not a recognized streaming provider, though the gateway status is configured with the requested dashboard URL.
+- Discord only renders bot streaming presence with Twitch or YouTube URLs; set `DISCORD_STREAM_URL` to one of those URLs.
 - Exactly-once external Discord delivery cannot be mathematically guaranteed across a crash after Discord accepts a message but before PostgreSQL records it; delivery records reduce ordinary duplication risk.
 - The plaintext dashboard password option was explicitly requested. Prefer a long unique value even when it is sealed in Railway.
 

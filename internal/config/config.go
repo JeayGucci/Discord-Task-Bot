@@ -20,6 +20,7 @@ type Config struct {
 	DiscordOwnerID          string
 	DiscordLogChannelID     string
 	DiscordRegisterCommands bool
+	DiscordStreamURL        string
 	OpenAIAPIKey            string
 	OpenAIModel             string
 	OpenAIBaseURL           string
@@ -43,6 +44,7 @@ func Load() (Config, error) {
 		DiscordOwnerID:          os.Getenv("DISCORD_OWNER_ID"),
 		DiscordLogChannelID:     value("DISCORD_LOG_CHANNEL_ID", "1526851837221671043"),
 		DiscordRegisterCommands: boolean("DISCORD_REGISTER_COMMANDS", os.Getenv("APP_ENV") != "production"),
+		DiscordStreamURL:        os.Getenv("DISCORD_STREAM_URL"),
 		OpenAIAPIKey:            os.Getenv("OPENAI_API_KEY"),
 		OpenAIModel:             value("OPENAI_CHAT_MODEL", "gpt-5-nano"),
 		OpenAIBaseURL:           value("OPENAI_BASE_URL", "https://api.openai.com/v1"),

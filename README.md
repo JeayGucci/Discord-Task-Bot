@@ -16,7 +16,8 @@ The authoritative product and architecture plan is in [plan.md](plan.md).
 - Local-login calendar dashboard and session-protected reminder API.
 - Health and readiness checks for Railway.
 - Privacy-conscious operational audit messages in a configured Discord channel.
-- Discord streaming presence labeled “Streamlining your tasks” and linked to the dashboard.
+- Discord streaming presence labeled “Streamlining your tasks”.
+- `/dashboard` command that returns the private dashboard URL.
 - Docker, local PostgreSQL, and GitHub Actions CI.
 
 ## Local setup
@@ -44,6 +45,8 @@ The service applies versioned SQL migrations at startup. If Discord credentials 
 6. During development, set `DISCORD_GUILD_ID` to a private test server for immediate command updates.
 7. Set `DISCORD_OWNER_ID` to your user ID to keep the initial bot private.
 8. `DISCORD_REGISTER_COMMANDS` defaults to enabled outside production and disabled in production. Temporarily set it to `true` in production only when slash command definitions need to be pushed, then turn it back off.
+9. Set `DISCORD_STREAM_URL` to a Twitch or YouTube URL if you want the bot to show a streaming presence. Discord does not render arbitrary URLs as streaming.
+10. Put `DASHBOARD_BASE_URL` in the bot profile description in the Developer Portal if you want it visible on the bot profile.
 
 ## Railway deployment
 
@@ -69,6 +72,7 @@ Do not commit `.env`, Discord tokens, OpenAI keys, or production database URLs.
 /todo create title:Prepare notes when:2026-07-18 16:00
 /timezone set name:America/New_York
 /chat reset
+/dashboard
 /privacy delete-my-data
 ```
 

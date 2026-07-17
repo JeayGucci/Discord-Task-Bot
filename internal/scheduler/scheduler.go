@@ -54,11 +54,29 @@ func (s *Scheduler) runOnce(ctx context.Context) {
 		return
 	}
 	for _, reminder := range due {
+		s.logger.Info(
+			"delivering reminder",
+			"reminder_id", reminder.ID,
+			"title", reminder.Title,
+			"creator_id", reminder.CreatorID,
+			"guild_id", reminder.GuildID,
+			"channel_id", reminder.ChannelID,
+			"delivery_at", reminder.DeliveryAt,
+			"attempt", reminder.Attempts,
+		)
 		messageID, err := s.sender.SendReminder(ctx, reminder)
 		if err == nil {
 			if err := s.store.MarkSent(ctx, reminder.ID, messageID); err != nil {
 				s.logger.Error("mark reminder sent", "id", reminder.ID, "error", err)
 			}
+			s.logger.Info(
+				"reminder delivered",
+				"reminder_id", reminder.ID,
+				"creator_id", reminder.CreatorID,
+				"guild_id", reminder.GuildID,
+				"channel_id", reminder.ChannelID,
+				"discord_message_id", messageID,
+			)
 			continue
 		}
 		minutes := math.Pow(2, float64(reminder.Attempts))
@@ -66,6 +84,15 @@ func (s *Scheduler) runOnce(ctx context.Context) {
 			minutes = 60
 		}
 		retryAt := time.Now().Add(time.Duration(minutes) * time.Minute)
+		s.logger.Warn(
+			"reminder delivery failed",
+			"reminder_id", reminder.ID,
+			"creator_id", reminder.CreatorID,
+			"guild_id", reminder.GuildID,
+			"channel_id", reminder.ChannelID,
+			"retry_at", retryAt,
+			"error", err,
+		)
 		if markErr := s.store.MarkFailed(ctx, reminder.ID, fmt.Errorf("discord delivery: %w", err), retryAt); markErr != nil {
 			s.logger.Error("mark reminder failed", "id", reminder.ID, "error", markErr)
 		}

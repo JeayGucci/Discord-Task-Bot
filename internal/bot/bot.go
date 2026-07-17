@@ -24,6 +24,7 @@ type Bot struct {
 	guildID      string
 	ownerID      string
 	logChannelID string
+	streamURL    string
 	dashboardURL string
 	logger       *slog.Logger
 	commands     []*discordgo.ApplicationCommand
@@ -35,13 +36,13 @@ type Bot struct {
 	nextReminder time.Time
 }
 
-func New(token, appID, guildID, ownerID, logChannelID, dashboardURL string, store reminders.Store, aiClient *ai.Client, logger *slog.Logger) (*Bot, error) {
+func New(token, appID, guildID, ownerID, logChannelID, streamURL, dashboardURL string, store reminders.Store, aiClient *ai.Client, logger *slog.Logger) (*Bot, error) {
 	s, err := discordgo.New("Bot " + token)
 	if err != nil {
 		return nil, err
 	}
 	s.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentMessageContent
-	b := &Bot{session: s, store: store, ai: aiClient, appID: appID, guildID: guildID, ownerID: ownerID, logChannelID: logChannelID, dashboardURL: dashboardURL, logger: logger, commands: commandDefinitions()}
+	b := &Bot{session: s, store: store, ai: aiClient, appID: appID, guildID: guildID, ownerID: ownerID, logChannelID: logChannelID, streamURL: streamURL, dashboardURL: dashboardURL, logger: logger, commands: commandDefinitions()}
 	s.AddHandler(b.onInteraction)
 	s.AddHandler(b.onMessage)
 	return b, nil
@@ -58,11 +59,16 @@ func (b *Bot) Open(ctx context.Context, registerCommands bool) error {
 		}
 	}
 	b.logger.Info("discord bot connected", "guild_scoped", b.guildID != "", "register_commands", registerCommands)
-	if b.dashboardURL != "" {
-		if err := b.session.UpdateStreamingStatus(0, "Streamlining your tasks", b.dashboardURL); err != nil {
-			b.logger.Warn("set Discord streaming presence", "error", err)
-			b.audit("⚠️ TaskBot connected, but its streaming dashboard presence could not be set.")
+	if b.streamURL != "" {
+		if !isDiscordStreamingURL(b.streamURL) {
+			b.logger.Warn("Discord streaming presence URL should be a Twitch or YouTube URL", "url", b.streamURL)
 		}
+		if err := b.session.UpdateStreamingStatus(0, "Streamlining your tasks", b.streamURL); err != nil {
+			b.logger.Warn("set Discord streaming presence", "error", err)
+			b.audit("⚠️ TaskBot connected, but its streaming presence could not be set.")
+		}
+	} else {
+		b.logger.Warn("Discord streaming presence is disabled; set DISCORD_STREAM_URL to a Twitch or YouTube URL")
 	}
 	if registerCommands {
 		b.audit("✅ TaskBot connected and commands registered.")
@@ -115,6 +121,21 @@ func (b *Bot) waitForReminderSlot(ctx context.Context) error {
 
 func (b *Bot) allowed(userID string) bool { return b.ownerID == "" || b.ownerID == userID }
 
+func (b *Bot) dashboardMessage() string {
+	if strings.TrimSpace(b.dashboardURL) == "" {
+		return "The TaskBot dashboard URL is not configured."
+	}
+	return "TaskBot dashboard: " + b.dashboardURL
+}
+
+func isDiscordStreamingURL(value string) bool {
+	u := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(u, "https://twitch.tv/") ||
+		strings.HasPrefix(u, "https://www.twitch.tv/") ||
+		strings.HasPrefix(u, "https://youtube.com/") ||
+		strings.HasPrefix(u, "https://www.youtube.com/")
+}
+
 func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if i.Type != discordgo.InteractionApplicationCommand {
 		return
@@ -142,6 +163,8 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	case "chat":
 		err = b.store.ResetConversation(ctx, user.ID, i.ChannelID)
 		message = "Conversation context reset."
+	case "dashboard":
+		message = b.dashboardMessage()
 	case "privacy":
 		err = b.store.DeleteUserData(ctx, user.ID)
 		message = "Your stored reminders, preferences, and conversation data were deleted."
@@ -153,6 +176,7 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.audit(fmt.Sprintf("❌ Command failed · `/%s` · user <@%s> · `%s`", data.Name, user.ID, truncate(err.Error(), 400)))
 		message = "I couldn't complete that request: " + err.Error()
 	} else {
+		b.logger.Info("discord command completed", "command", data.Name, "user_id", user.ID, "guild_id", i.GuildID, "channel_id", i.ChannelID)
 		b.audit(fmt.Sprintf("✅ Command completed · `/%s` · user <@%s>", data.Name, user.ID))
 	}
 	b.respond(i, message, true)
@@ -231,6 +255,16 @@ func (b *Bot) createFromOptions(ctx context.Context, i *discordgo.InteractionCre
 	if err != nil {
 		return "", err
 	}
+	b.logger.Info(
+		"slash reminder created",
+		"reminder_id", r.ID,
+		"title", r.Title,
+		"user_id", user.ID,
+		"guild_id", i.GuildID,
+		"channel_id", i.ChannelID,
+		"delivery_at", r.DeliveryAt,
+		"timezone", r.Timezone,
+	)
 	return fmt.Sprintf("Created **%s** for <t:%d:F>. ID: `%s`", r.Title, r.DeliveryAt.Unix(), r.ID.String()[:8]), nil
 }
 
@@ -277,16 +311,35 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		b.reply(m, "AI chat is temporarily unavailable. Slash commands and existing reminders still work.")
 		return
 	}
+	b.logger.Info(
+		"AI response received",
+		"user_id", m.Author.ID,
+		"guild_id", m.GuildID,
+		"channel_id", m.ChannelID,
+		"response_id", result.ResponseID,
+		"has_tool_action", result.Action != nil,
+		"text", truncate(result.Text, 1000),
+	)
 	if result.ResponseID != "" {
 		if err := b.store.SaveConversation(ctx, m.Author.ID, m.GuildID, m.ChannelID, result.ResponseID, time.Now().Add(7*24*time.Hour)); err != nil {
 			b.logger.Warn("save conversation", "error", err)
 		}
 	}
 	if result.Action == nil {
+		b.logger.Info("AI chat reply sent", "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID)
 		b.reply(m, truncate(result.Text, 1900))
 		return
 	}
+	b.logger.Info(
+		"AI tool action requested",
+		"user_id", m.Author.ID,
+		"guild_id", m.GuildID,
+		"channel_id", m.ChannelID,
+		"tool", result.Action.Name,
+		"arguments", truncate(string(result.Action.Arguments), 1000),
+	)
 	if result.Action.Name != "create_reminder" {
+		b.logger.Warn("unsupported AI tool action", "tool", result.Action.Name, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID)
 		b.reply(m, "I can't perform that action yet.")
 		return
 	}
@@ -306,9 +359,20 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 	}
 	r, err := b.store.Create(ctx, reminders.CreateParams{Title: args.Title, Description: args.Description, CreatorID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID, MentionTarget: "<@" + m.Author.ID + ">", DeliveryAt: delivery, Timezone: timezone})
 	if err != nil {
+		b.logger.Error("AI reminder creation failed", "error", err, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID)
 		b.reply(m, "I couldn't create that reminder: "+err.Error())
 		return
 	}
+	b.logger.Info(
+		"AI reminder created",
+		"reminder_id", r.ID,
+		"title", r.Title,
+		"user_id", m.Author.ID,
+		"guild_id", m.GuildID,
+		"channel_id", m.ChannelID,
+		"delivery_at", r.DeliveryAt,
+		"timezone", r.Timezone,
+	)
 	b.audit(fmt.Sprintf("🤖 Natural-language reminder created · `%s` · user <@%s> · <t:%d:F>", r.ID.String()[:8], m.Author.ID, r.DeliveryAt.Unix()))
 	b.reply(m, fmt.Sprintf("Created **%s** for <t:%d:F>. ID: `%s`", r.Title, r.DeliveryAt.Unix(), r.ID.String()[:8]))
 }
@@ -474,6 +538,7 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 		{Name: "todo", Description: "Create a to-do reminder", Options: []*discordgo.ApplicationCommandOption{create}},
 		{Name: "timezone", Description: "Set your timezone", Options: []*discordgo.ApplicationCommandOption{{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "set", Description: "Set an IANA timezone", Options: []*discordgo.ApplicationCommandOption{stringOption("name", "For example America/New_York", true)}}}},
 		{Name: "chat", Description: "Manage AI conversation context", Options: []*discordgo.ApplicationCommandOption{{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "reset", Description: "Reset your context"}}},
+		{Name: "dashboard", Description: "Get the TaskBot dashboard URL"},
 		{Name: "privacy", Description: "Manage your stored data", Options: []*discordgo.ApplicationCommandOption{{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "delete-my-data", Description: "Delete your stored data"}}},
 	}
 }
