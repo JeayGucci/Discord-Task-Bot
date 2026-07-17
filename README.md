@@ -17,7 +17,7 @@ The authoritative product and architecture plan is in [plan.md](plan.md).
 - Local-login calendar dashboard and session-protected reminder API.
 - Admin-managed dashboard users with optional Discord ID linking.
 - Public dashboard calendar/reminder creation using a managed-user dropdown.
-- Dashboard toggle for viewing past reminders.
+- Dashboard shows all users' reminders by default, with a user filter and a past-reminders toggle.
 - Health and readiness checks for Railway.
 - Privacy-conscious operational audit messages in a configured Discord channel.
 - Reminder pings are delivered to the fixed `DISCORD_REMINDER_CHANNEL_ID` channel.

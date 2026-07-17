@@ -147,7 +147,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		from = time.Time{}
 	}
 	creator := q.Get("creator_id")
-	if creator == "" {
+	if creator == "" && q.Get("all") != "true" {
 		creator = s.ownerID
 	}
 	items, err := s.store.List(r.Context(), reminders.ListFilter{CreatorID: creator, From: from, To: to, Limit: 500})
@@ -457,7 +457,7 @@ function selectedUser(){return users.find(u=>u.id===document.getElementById('rem
 function refreshReminderUser(){
  const select=document.getElementById('reminder-user');
  const previous=select.value;
- select.innerHTML='<option value="">Choose user to ping</option>'+users.filter(u=>u.discord_user_id).map(u=>'<option value="'+esc(u.id)+'">'+esc(u.display_name)+' ('+esc(u.discord_user_id)+')</option>').join('');
+ select.innerHTML='<option value="">All reminders</option>'+users.filter(u=>u.discord_user_id).map(u=>'<option value="'+esc(u.id)+'">'+esc(u.display_name)+' ('+esc(u.discord_user_id)+')</option>').join('');
  if([...select.options].some(o=>o.value===previous))select.value=previous;
  const u=selectedUser();
  if(u)document.getElementById('reminder-timezone').value=u.timezone;
@@ -483,8 +483,7 @@ document.addEventListener('DOMContentLoaded',()=>{
  calendar=new FullCalendar.Calendar(document.getElementById('calendar'),{initialView:'dayGridMonth',headerToolbar:{left:'prev,next today',center:'title',right:'dayGridMonth,timeGridWeek,listMonth'},events:(i,ok,fail)=>{
   const u=selectedUser();
   const creator=u&&u.discord_user_id?u.discord_user_id:'';
-  if(!creator){ok([]);return}
-  api('/api/reminders?start='+encodeURIComponent(i.startStr)+'&end='+encodeURIComponent(i.endStr)+'&creator_id='+encodeURIComponent(creator)+'&past='+showPast).then(r=>r.ok?r.json():Promise.reject(Error('Unable to load reminders'))).then(ok).catch(fail)
+  api('/api/reminders?start='+encodeURIComponent(i.startStr)+'&end='+encodeURIComponent(i.endStr)+'&creator_id='+encodeURIComponent(creator)+'&all='+(creator===''?'true':'false')+'&past='+showPast).then(r=>r.ok?r.json():Promise.reject(Error('Unable to load reminders'))).then(ok).catch(fail)
  },eventClick:i=>{if(confirm('Cancel '+i.event.title+'?'))api('/api/reminders/'+i.event.id+'/cancel',{method:'POST'}).then(r=>{if(!r.ok)throw Error('Cancel failed');calendar.refetchEvents()}).catch(e=>status.textContent=e.message)}});
  calendar.render();
  if(!isAdmin)document.getElementById('admin-users').hidden=true;
@@ -495,7 +494,7 @@ document.addEventListener('DOMContentLoaded',()=>{
  document.getElementById('toggle-past').onclick=e=>{showPast=!showPast;e.target.textContent=showPast?'Show current reminders':'Show past reminders';calendar.changeView(showPast?'listMonth':'dayGridMonth');calendar.refetchEvents()};
  document.getElementById('user-create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DisplayName:f.get('display'),DiscordUserID:f.get('discord'),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());e.target.reset();e.target.elements.timezone.value='America/New_York';return loadUsers()}).catch(e=>status.textContent=e.message)};
  document.getElementById('users').onclick=e=>{const btn=e.target.closest('button');if(!btn)return;const row=btn.closest('.user');const id=row.dataset.id;if(btn.dataset.action==='delete'){if(!confirm('Delete this user?'))return;api('/api/users/'+id,{method:'DELETE'}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message);return}const body={DisplayName:row.querySelector('[name=display]').value,DiscordUserID:row.querySelector('[name=discord]').value,Timezone:row.querySelector('[name=timezone]').value};api('/api/users/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message)};
- document.getElementById('create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const u=selectedUser();if(!u||!u.discord_user_id){status.textContent='Choose a linked Discord user.';return}api('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Title:f.get('title'),CreatorID:u.discord_user_id,DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());status.textContent='Reminder created.';e.target.elements.title.value='';calendar.refetchEvents()}).catch(e=>status.textContent=e.message)};
+ document.getElementById('create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const u=selectedUser();if(!u||!u.discord_user_id){status.textContent='Choose a linked Discord user to ping.';return}api('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Title:f.get('title'),CreatorID:u.discord_user_id,DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());status.textContent='Reminder created.';e.target.elements.title.value='';calendar.refetchEvents()}).catch(e=>status.textContent=e.message)};
  loadUsers().catch(e=>status.textContent=e.message);
 });
 </script>
