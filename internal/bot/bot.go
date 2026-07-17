@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -26,6 +27,12 @@ type Bot struct {
 	dashboardURL string
 	logger       *slog.Logger
 	commands     []*discordgo.ApplicationCommand
+	auditMu      sync.Mutex
+	auditWindow  time.Time
+	auditSent    int
+	auditDropped int
+	reminderMu   sync.Mutex
+	nextReminder time.Time
 }
 
 func New(token, appID, guildID, ownerID, logChannelID, dashboardURL string, store reminders.Store, aiClient *ai.Client, logger *slog.Logger) (*Bot, error) {
@@ -40,31 +47,38 @@ func New(token, appID, guildID, ownerID, logChannelID, dashboardURL string, stor
 	return b, nil
 }
 
-func (b *Bot) Open(ctx context.Context) error {
+func (b *Bot) Open(ctx context.Context, registerCommands bool) error {
 	if err := b.session.Open(); err != nil {
 		return err
 	}
-	for _, command := range b.commands {
-		if _, err := b.session.ApplicationCommandCreate(b.appID, b.guildID, command); err != nil {
+	if registerCommands {
+		if _, err := b.session.ApplicationCommandBulkOverwrite(b.appID, b.guildID, b.commands); err != nil {
 			b.session.Close()
-			return fmt.Errorf("register /%s: %w", command.Name, err)
+			return fmt.Errorf("register commands: %w", err)
 		}
 	}
-	b.logger.Info("discord bot connected", "guild_scoped", b.guildID != "")
+	b.logger.Info("discord bot connected", "guild_scoped", b.guildID != "", "register_commands", registerCommands)
 	if b.dashboardURL != "" {
 		if err := b.session.UpdateStreamingStatus(0, "Streamlining your tasks", b.dashboardURL); err != nil {
 			b.logger.Warn("set Discord streaming presence", "error", err)
 			b.audit("⚠️ TaskBot connected, but its streaming dashboard presence could not be set.")
 		}
 	}
-	b.audit("✅ TaskBot connected and commands registered.")
+	if registerCommands {
+		b.audit("✅ TaskBot connected and commands registered.")
+	} else {
+		b.audit("✅ TaskBot connected.")
+	}
 	go func() { <-ctx.Done(); _ = b.session.Close() }()
 	return nil
 }
 
 func (b *Bot) Close() error { return b.session.Close() }
 
-func (b *Bot) SendReminder(_ context.Context, r reminders.Reminder) (string, error) {
+func (b *Bot) SendReminder(ctx context.Context, r reminders.Reminder) (string, error) {
+	if err := b.waitForReminderSlot(ctx); err != nil {
+		return "", err
+	}
 	content := strings.TrimSpace(r.MentionTarget + " Reminder: **" + r.Title + "**")
 	message, err := b.session.ChannelMessageSend(r.ChannelID, content)
 	if err != nil {
@@ -73,6 +87,30 @@ func (b *Bot) SendReminder(_ context.Context, r reminders.Reminder) (string, err
 	}
 	b.audit(fmt.Sprintf("🔔 Reminder delivered · `%s` · channel <#%s>", r.ID.String()[:8], r.ChannelID))
 	return message.ID, nil
+}
+
+func (b *Bot) waitForReminderSlot(ctx context.Context) error {
+	const minimumSpacing = 1200 * time.Millisecond
+	b.reminderMu.Lock()
+	now := time.Now()
+	wait := time.Duration(0)
+	if now.Before(b.nextReminder) {
+		wait = b.nextReminder.Sub(now)
+		now = b.nextReminder
+	}
+	b.nextReminder = now.Add(minimumSpacing)
+	b.reminderMu.Unlock()
+	if wait == 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (b *Bot) allowed(userID string) bool { return b.ownerID == "" || b.ownerID == userID }
@@ -280,9 +318,33 @@ func (b *Bot) audit(message string) {
 	if b.logChannelID == "" || b.session == nil {
 		return
 	}
+	if !b.allowAuditMessage() {
+		return
+	}
 	if _, err := b.session.ChannelMessageSend(b.logChannelID, truncate(message, 1900)); err != nil {
 		b.logger.Warn("send Discord audit log", "error", err)
 	}
+}
+
+func (b *Bot) allowAuditMessage() bool {
+	const maxPerMinute = 20
+	now := time.Now()
+	b.auditMu.Lock()
+	defer b.auditMu.Unlock()
+	if b.auditWindow.IsZero() || now.Sub(b.auditWindow) >= time.Minute {
+		if b.auditDropped > 0 {
+			b.logger.Warn("Discord audit messages dropped by local throttle", "count", b.auditDropped)
+		}
+		b.auditWindow = now
+		b.auditSent = 0
+		b.auditDropped = 0
+	}
+	if b.auditSent >= maxPerMinute {
+		b.auditDropped++
+		return false
+	}
+	b.auditSent++
+	return true
 }
 func (b *Bot) respond(i *discordgo.InteractionCreate, text string, ephemeral bool) {
 	flags := discordgo.MessageFlags(0)

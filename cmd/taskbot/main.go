@@ -49,7 +49,7 @@ func run(logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		if err := discordBot.Open(ctx); err != nil {
+		if err := discordBot.Open(ctx, cfg.DiscordRegisterCommands); err != nil {
 			return err
 		}
 		defer discordBot.Close()

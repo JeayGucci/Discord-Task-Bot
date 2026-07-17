@@ -43,6 +43,7 @@ The service applies versioned SQL migrations at startup. If Discord credentials 
 5. Set `DISCORD_BOT_TOKEN` and `DISCORD_APPLICATION_ID`.
 6. During development, set `DISCORD_GUILD_ID` to a private test server for immediate command updates.
 7. Set `DISCORD_OWNER_ID` to your user ID to keep the initial bot private.
+8. `DISCORD_REGISTER_COMMANDS` defaults to enabled outside production and disabled in production. Temporarily set it to `true` in production only when slash command definitions need to be pushed, then turn it back off.
 
 ## Railway deployment
 
@@ -53,6 +54,7 @@ The service applies versioned SQL migrations at startup. If Discord credentials 
 5. Set `DASHBOARD_USERNAME` and either `DASHBOARD_PASSWORD` or the safer `DASHBOARD_PASSWORD_HASH` generated with `go run ./cmd/hash-password`. Never use a common password on the public Railway URL.
 6. Deploy. Railway uses `Dockerfile` and checks `/readyz`.
 7. Generate a public domain for the dashboard and store it as `DASHBOARD_BASE_URL`.
+8. Leave `DISCORD_REGISTER_COMMANDS` unset or `false` for normal production deploys to avoid unnecessary Discord REST calls during restarts. Set it to `true` for one deployment after changing slash commands.
 
 Do not commit `.env`, Discord tokens, OpenAI keys, or production database URLs.
 

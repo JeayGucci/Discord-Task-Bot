@@ -11,46 +11,48 @@ import (
 )
 
 type Config struct {
-	Environment           string
-	Port                  string
-	DatabasePublicURL     string
-	DiscordToken          string
-	DiscordAppID          string
-	DiscordGuildID        string
-	DiscordOwnerID        string
-	DiscordLogChannelID   string
-	OpenAIAPIKey          string
-	OpenAIModel           string
-	OpenAIBaseURL         string
-	DashboardBaseURL      string
-	DashboardUsername     string
-	DashboardPasswordHash string
-	DashboardPassword     string
-	DefaultTimezone       string
-	SchedulerInterval     time.Duration
-	ClaimLimit            int
+	Environment             string
+	Port                    string
+	DatabasePublicURL       string
+	DiscordToken            string
+	DiscordAppID            string
+	DiscordGuildID          string
+	DiscordOwnerID          string
+	DiscordLogChannelID     string
+	DiscordRegisterCommands bool
+	OpenAIAPIKey            string
+	OpenAIModel             string
+	OpenAIBaseURL           string
+	DashboardBaseURL        string
+	DashboardUsername       string
+	DashboardPasswordHash   string
+	DashboardPassword       string
+	DefaultTimezone         string
+	SchedulerInterval       time.Duration
+	ClaimLimit              int
 }
 
 func Load() (Config, error) {
 	c := Config{
-		Environment:           value("APP_ENV", "development"),
-		Port:                  value("PORT", "8080"),
-		DatabasePublicURL:     os.Getenv("DATABASE_PUBLIC_URL"),
-		DiscordToken:          os.Getenv("DISCORD_BOT_TOKEN"),
-		DiscordAppID:          os.Getenv("DISCORD_APPLICATION_ID"),
-		DiscordGuildID:        os.Getenv("DISCORD_GUILD_ID"),
-		DiscordOwnerID:        os.Getenv("DISCORD_OWNER_ID"),
-		DiscordLogChannelID:   value("DISCORD_LOG_CHANNEL_ID", "1526851837221671043"),
-		OpenAIAPIKey:          os.Getenv("OPENAI_API_KEY"),
-		OpenAIModel:           value("OPENAI_CHAT_MODEL", "gpt-5-nano"),
-		OpenAIBaseURL:         value("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-		DashboardBaseURL:      os.Getenv("DASHBOARD_BASE_URL"),
-		DashboardUsername:     value("DASHBOARD_USERNAME", "admin"),
-		DashboardPasswordHash: os.Getenv("DASHBOARD_PASSWORD_HASH"),
-		DashboardPassword:     os.Getenv("DASHBOARD_PASSWORD"),
-		DefaultTimezone:       value("DEFAULT_TIMEZONE", "America/New_York"),
-		SchedulerInterval:     duration("SCHEDULER_INTERVAL", 15*time.Second),
-		ClaimLimit:            integer("SCHEDULER_CLAIM_LIMIT", 25),
+		Environment:             value("APP_ENV", "development"),
+		Port:                    value("PORT", "8080"),
+		DatabasePublicURL:       os.Getenv("DATABASE_PUBLIC_URL"),
+		DiscordToken:            os.Getenv("DISCORD_BOT_TOKEN"),
+		DiscordAppID:            os.Getenv("DISCORD_APPLICATION_ID"),
+		DiscordGuildID:          os.Getenv("DISCORD_GUILD_ID"),
+		DiscordOwnerID:          os.Getenv("DISCORD_OWNER_ID"),
+		DiscordLogChannelID:     value("DISCORD_LOG_CHANNEL_ID", "1526851837221671043"),
+		DiscordRegisterCommands: boolean("DISCORD_REGISTER_COMMANDS", os.Getenv("APP_ENV") != "production"),
+		OpenAIAPIKey:            os.Getenv("OPENAI_API_KEY"),
+		OpenAIModel:             value("OPENAI_CHAT_MODEL", "gpt-5-nano"),
+		OpenAIBaseURL:           value("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+		DashboardBaseURL:        os.Getenv("DASHBOARD_BASE_URL"),
+		DashboardUsername:       value("DASHBOARD_USERNAME", "admin"),
+		DashboardPasswordHash:   os.Getenv("DASHBOARD_PASSWORD_HASH"),
+		DashboardPassword:       os.Getenv("DASHBOARD_PASSWORD"),
+		DefaultTimezone:         value("DEFAULT_TIMEZONE", "America/New_York"),
+		SchedulerInterval:       duration("SCHEDULER_INTERVAL", 15*time.Second),
+		ClaimLimit:              integer("SCHEDULER_CLAIM_LIMIT", 25),
 	}
 
 	if _, err := time.LoadLocation(c.DefaultTimezone); err != nil {
@@ -95,4 +97,18 @@ func integer(key string, fallback int) int {
 		return fallback
 	}
 	return v
+}
+
+func boolean(key string, fallback bool) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch v {
+	case "":
+		return fallback
+	case "1", "true", "t", "yes", "y", "on":
+		return true
+	case "0", "false", "f", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
 }

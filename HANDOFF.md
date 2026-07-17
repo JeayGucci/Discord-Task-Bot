@@ -1,6 +1,6 @@
 # TaskBot Continuation Handoff
 
-Last updated: 2026-07-15
+Last updated: 2026-07-17
 
 This document captures the decisions and implementation context from the original planning and build conversation so work can continue from another computer. It intentionally excludes Discord bot tokens, OpenAI API keys, database credentials, passwords, session cookies, and other secrets.
 
@@ -64,6 +64,7 @@ DISCORD_APPLICATION_ID=1526848626150871112
 DISCORD_GUILD_ID=1526434983823278202
 DISCORD_OWNER_ID=953631701056229426
 DISCORD_LOG_CHANNEL_ID=1526851837221671043
+DISCORD_REGISTER_COMMANDS=false
 OPENAI_API_KEY=SEALED_IN_RAILWAY
 OPENAI_CHAT_MODEL=gpt-5-nano
 OPENAI_BASE_URL=https://api.openai.com/v1
@@ -95,8 +96,10 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - General AI conversation when the bot is mentioned
 - Owner allowlisting through `DISCORD_OWNER_ID`
 - Guild-scoped command registration during development/initial deployment
+- Production command registration is opt-in through `DISCORD_REGISTER_COMMANDS=true`; leave it disabled for normal deploys.
 - Streaming activity linked to the web dashboard
 - Privacy-conscious operational audit messages
+- Local throttling for Discord audit messages to avoid bursty REST calls
 
 ### Reminder delivery
 
