@@ -259,6 +259,8 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
 	defer cancel()
+	stopTyping := b.startTyping(ctx, m.ChannelID)
+	defer stopTyping()
 	timezone, err := b.store.GetTimezone(ctx, m.Author.ID, m.GuildID)
 	if err != nil {
 		b.reply(m, "I couldn't load your timezone.")
@@ -314,6 +316,32 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 func (b *Bot) reply(m *discordgo.MessageCreate, text string) {
 	_, _ = b.session.ChannelMessageSendReply(m.ChannelID, text, m.Reference())
 }
+
+func (b *Bot) startTyping(ctx context.Context, channelID string) func() {
+	done := make(chan struct{})
+	sendTyping := func() {
+		if err := b.session.ChannelTyping(channelID); err != nil {
+			b.logger.Warn("send Discord typing indicator", "error", err)
+		}
+	}
+	sendTyping()
+	go func() {
+		ticker := time.NewTicker(8 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			case <-ticker.C:
+				sendTyping()
+			}
+		}
+	}()
+	return func() { close(done) }
+}
+
 func (b *Bot) audit(message string) {
 	if b.logChannelID == "" || b.session == nil {
 		return
