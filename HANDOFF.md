@@ -90,6 +90,7 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - `/remind edit`
 - `/remind cancel`
 - `/remind complete`
+- `/reminders` owner-only all-current-reminders list
 - `/todo create`
 - `/timezone set`
 - `/chat reset`

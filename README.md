@@ -8,6 +8,7 @@ The authoritative product and architecture plan is in [plan.md](plan.md).
 
 - Durable, timezone-aware reminders stored in PostgreSQL.
 - Discord `/remind create`, `/remind list`, `/remind cancel`, and `/remind complete` commands.
+- Owner-only `/reminders` command to list all current reminders.
 - Discord `/remind edit` for rescheduling and renaming pending reminders.
 - `/todo create`, `/timezone set`, `/chat reset`, and `/privacy delete-my-data`.
 - Natural-language reminder creation and general chat when the bot is mentioned.
@@ -76,6 +77,7 @@ Viewing the calendar and creating reminders from the dashboard do not require lo
 /remind edit id:abcd1234 title:Finish SOAP note when:2026-07-18 18:00
 /remind cancel id:abcd1234
 /remind complete id:abcd1234
+/reminders include_completed:false
 /todo create title:Prepare notes when:2026-07-18 16:00 user:@User
 /timezone set name:America/New_York
 /chat reset
