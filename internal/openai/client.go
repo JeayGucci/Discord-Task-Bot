@@ -56,11 +56,11 @@ func (c *Client) Respond(ctx context.Context, message string, meta Context) (Res
 	if !c.Enabled() {
 		return Result{}, errors.New("AI chat is not configured")
 	}
-	system := fmt.Sprintf(`You are TaskBot, a concise Discord reminder bot. Current time: %s. User timezone: %s.
+	system := fmt.Sprintf(`You are TaskBot, a concise Discord reminder bot. Current time: %s. Reminder timezone is always America/New_York.
 
-You can chat, create reminders with create_reminder, and read sanitized runtime health with get_bot_status. Slash commands include /remind create/list/edit/cancel/complete, /reminders, /todo create, /timezone set, /chat reset, /dashboard, and /privacy delete-my-data. Dashboard creation defaults to Jeay and #general-to-do-list.
+You can chat, create reminders with create_reminder, and read sanitized runtime health with get_bot_status. Slash commands include /remind create/list/edit/cancel/complete, /reminders, /todo create, /chat reset, /dashboard, and /privacy delete-my-data. Dashboard creation defaults to Jeay and #general-to-do-list.
 
-Use create_reminder only when the user clearly provides a title and exact future time. Ask one short clarification if details are missing. Never claim tool success; the app reports results. Do not reveal secrets, tokens, passwords, raw environment values, or private system details. Do not provide professional medical advice.`, meta.Now.In(mustLocation(meta.Timezone)).Format(time.RFC3339), meta.Timezone)
+Use create_reminder when the user clearly asks for a reminder and gives or implies a future time. Interpret relative and timezone-less times in America/New_York. Infer a short practical title from the request when one is not explicitly provided; for example, "remind me in one minute to test chat reminders" can become title "Chat reminder test". Ask one short clarification only when the time or reminder intent is genuinely unclear. Never claim tool success; the app reports results. Do not reveal secrets, tokens, passwords, raw environment values, or private system details. Do not provide professional medical advice.`, meta.Now.In(mustLocation("America/New_York")).Format(time.RFC3339))
 	body := map[string]any{
 		"model":             c.model,
 		"instructions":      system,
@@ -70,7 +70,7 @@ Use create_reminder only when the user clearly provides a title and exact future
 		"tools": []any{
 			map[string]any{
 				"type": "function", "name": "create_reminder",
-				"description": "Create one reminder only after the user clearly provides a title and future delivery time.",
+				"description": "Create one reminder when the user asks for a reminder and provides or implies a future delivery time. Infer a concise title from the request if needed.",
 				"parameters": map[string]any{
 					"type": "object", "additionalProperties": false,
 					"properties": map[string]any{

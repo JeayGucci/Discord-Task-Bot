@@ -23,6 +23,9 @@ func TestRespondParsesFunctionCall(t *testing.T) {
 		if !strings.Contains(string(body), "get_bot_status") {
 			t.Error("request does not contain get_bot_status tool")
 		}
+		if !strings.Contains(string(body), "Infer a short practical title") {
+			t.Error("request does not instruct title inference")
+		}
 		var request struct {
 			MaxOutputTokens int `json:"max_output_tokens"`
 			Tools           []struct {

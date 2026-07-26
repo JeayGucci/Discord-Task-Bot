@@ -36,6 +36,8 @@ type Bot struct {
 	nextReminder      time.Time
 }
 
+const fixedTimezone = "America/New_York"
+
 func New(token, appID, guildID, ownerID, reminderChannelID, streamURL, dashboardURL string, store reminders.Store, aiClient *ai.Client, logger *slog.Logger, recorder *ops.Recorder) (*Bot, error) {
 	s, err := discordgo.New("Bot " + token)
 	if err != nil {
@@ -292,15 +294,11 @@ func (b *Bot) handleRemind(ctx context.Context, i *discordgo.InteractionCreate, 
 		if err != nil {
 			return "", err
 		}
-		timezone, err := b.store.GetTimezone(ctx, interactionUser(i).ID, i.GuildID)
+		delivery, err := parseUserTime(optionString(options[0].Options, "when"), fixedTimezone, time.Now())
 		if err != nil {
 			return "", err
 		}
-		delivery, err := parseUserTime(optionString(options[0].Options, "when"), timezone, time.Now())
-		if err != nil {
-			return "", err
-		}
-		updated, err := b.store.Update(ctx, reminders.UpdateParams{ID: id, CreatorID: interactionUser(i).ID, Title: optionString(options[0].Options, "title"), DeliveryAt: delivery, Timezone: timezone})
+		updated, err := b.store.Update(ctx, reminders.UpdateParams{ID: id, CreatorID: interactionUser(i).ID, Title: optionString(options[0].Options, "title"), DeliveryAt: delivery, Timezone: fixedTimezone})
 		if err != nil {
 			return "", err
 		}
@@ -339,15 +337,11 @@ func (b *Bot) createFromOptions(ctx context.Context, i *discordgo.InteractionCre
 	if channelID == "" {
 		return "", errors.New("choose the Discord channel for the reminder")
 	}
-	timezone, err := b.store.GetTimezone(ctx, target.ID, i.GuildID)
+	delivery, err := parseUserTime(optionString(options, "when"), fixedTimezone, time.Now())
 	if err != nil {
 		return "", err
 	}
-	delivery, err := parseUserTime(optionString(options, "when"), timezone, time.Now())
-	if err != nil {
-		return "", err
-	}
-	r, err := b.store.Create(ctx, reminders.CreateParams{Title: optionString(options, "title"), CreatorID: target.ID, GuildID: i.GuildID, ChannelID: channelID, MentionTarget: "<@" + target.ID + ">", DeliveryAt: delivery, Timezone: timezone})
+	r, err := b.store.Create(ctx, reminders.CreateParams{Title: optionString(options, "title"), CreatorID: target.ID, GuildID: i.GuildID, ChannelID: channelID, MentionTarget: "<@" + target.ID + ">", DeliveryAt: delivery, Timezone: fixedTimezone})
 	if err != nil {
 		return "", err
 	}
@@ -367,11 +361,7 @@ func (b *Bot) createFromOptions(ctx context.Context, i *discordgo.InteractionCre
 }
 
 func (b *Bot) handleTimezone(ctx context.Context, userID string, options []*discordgo.ApplicationCommandInteractionDataOption) (string, error) {
-	zone := optionString(subOptions(options, "set"), "name")
-	if _, err := time.LoadLocation(zone); err != nil {
-		return "", errors.New("use an IANA timezone such as America/New_York")
-	}
-	return "Timezone set to **" + zone + "**.", b.store.SetTimezone(ctx, userID, zone)
+	return "TaskBot uses **America/New_York** for all reminders.", nil
 }
 
 func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
@@ -393,23 +383,18 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 	defer cancel()
 	stopTyping := b.startTyping(ctx, m.ChannelID)
 	defer stopTyping()
-	timezone, err := b.store.GetTimezone(ctx, m.Author.ID, m.GuildID)
-	if err != nil {
-		b.reply(m, "I couldn't load your timezone.")
-		return
-	}
 	previousID, err := b.store.GetConversation(ctx, m.Author.ID, m.ChannelID)
 	if err != nil {
 		b.logger.Warn("load conversation", "error", err)
 	}
-	result, err := b.ai.Respond(ctx, content, ai.Context{Now: time.Now(), Timezone: timezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID, PreviousResponseID: previousID})
+	result, err := b.ai.Respond(ctx, content, ai.Context{Now: time.Now(), Timezone: fixedTimezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID, PreviousResponseID: previousID})
 	if err != nil && previousID != "" && strings.Contains(err.Error(), "No tool output found") {
 		b.logger.Warn("reset stale AI conversation after missing tool output", "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "previous_response_id", previousID)
 		b.recorder.Record("warn", "ai", "reset stale AI conversation after missing tool output", ops.Attributes("user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "previous_response_id", previousID))
 		if resetErr := b.store.ResetConversation(ctx, m.Author.ID, m.ChannelID); resetErr != nil {
 			b.logger.Warn("reset stale AI conversation", "error", resetErr)
 		}
-		result, err = b.ai.Respond(ctx, content, ai.Context{Now: time.Now(), Timezone: timezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID})
+		result, err = b.ai.Respond(ctx, content, ai.Context{Now: time.Now(), Timezone: fixedTimezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID})
 	}
 	if err != nil {
 		b.logger.Error("AI response", "error", err)
@@ -474,7 +459,7 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 	if channelID == "" {
 		channelID = m.ChannelID
 	}
-	r, err := b.store.Create(ctx, reminders.CreateParams{Title: args.Title, Description: args.Description, CreatorID: m.Author.ID, GuildID: m.GuildID, ChannelID: channelID, MentionTarget: "<@" + m.Author.ID + ">", DeliveryAt: delivery, Timezone: timezone})
+	r, err := b.store.Create(ctx, reminders.CreateParams{Title: args.Title, Description: args.Description, CreatorID: m.Author.ID, GuildID: m.GuildID, ChannelID: channelID, MentionTarget: "<@" + m.Author.ID + ">", DeliveryAt: delivery, Timezone: fixedTimezone})
 	if err != nil {
 		b.logger.Error("AI reminder creation failed", "error", err, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID)
 		b.recorder.Record("error", "reminder", "AI reminder creation failed", ops.Attributes("error", err.Error(), "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID))
@@ -701,12 +686,11 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 	channelOption := func(name, description string, required bool) *discordgo.ApplicationCommandOption {
 		return &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionChannel, Name: name, Description: description, Required: required, ChannelTypes: []discordgo.ChannelType{discordgo.ChannelTypeGuildText, discordgo.ChannelTypeGuildNews}}
 	}
-	create := &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "create", Description: "Create a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("title", "What to remember", true), stringOption("when", "YYYY-MM-DD HH:MM in the target user's timezone", true), userOption("user", "Discord user to ping", true), channelOption("channel", "Channel where the reminder should post", true)}}
+	create := &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "create", Description: "Create a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("title", "What to remember", true), stringOption("when", "YYYY-MM-DD HH:MM in America/New_York", true), userOption("user", "Discord user to ping", true), channelOption("channel", "Channel where the reminder should post", true)}}
 	return []*discordgo.ApplicationCommand{
 		{Name: "remind", Description: "Manage reminders", Options: []*discordgo.ApplicationCommandOption{create, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "list", Description: "List your reminders"}, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "edit", Description: "Edit a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("id", "Reminder ID or prefix", true), stringOption("title", "Updated title", true), stringOption("when", "Updated YYYY-MM-DD HH:MM", true)}}, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "cancel", Description: "Cancel a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("id", "Reminder ID or prefix", true)}}, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "complete", Description: "Complete a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("id", "Reminder ID or prefix", true)}}}},
 		{Name: "reminders", Description: "Owner: list all current reminders"},
 		{Name: "todo", Description: "Create a to-do reminder", Options: []*discordgo.ApplicationCommandOption{create}},
-		{Name: "timezone", Description: "Set your timezone", Options: []*discordgo.ApplicationCommandOption{{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "set", Description: "Set an IANA timezone", Options: []*discordgo.ApplicationCommandOption{stringOption("name", "For example America/New_York", true)}}}},
 		{Name: "chat", Description: "Manage AI conversation context", Options: []*discordgo.ApplicationCommandOption{{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "reset", Description: "Reset your context"}}},
 		{Name: "dashboard", Description: "Get the TaskBot dashboard URL"},
 		{Name: "privacy", Description: "Manage your stored data", Options: []*discordgo.ApplicationCommandOption{{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "delete-my-data", Description: "Delete your stored data"}}},

@@ -51,6 +51,8 @@ type Server struct {
 	recorder          *ops.Recorder
 }
 
+const fixedTimezone = "America/New_York"
+
 func New(store reminders.Store, db Pinger, sessions SessionStore, channelProvider ChannelProvider, username, passwordHash, password, ownerID, reminderChannelID, defaultTimezone string, logger *slog.Logger, recorder *ops.Recorder) *Server {
 	hash := []byte(passwordHash)
 	if len(hash) == 0 && password != "" {
@@ -218,15 +220,12 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	if in.MentionTarget == "" && in.CreatorID != "" {
 		in.MentionTarget = "<@" + in.CreatorID + ">"
 	}
-	if in.Timezone == "" {
-		in.Timezone = s.defaultTimezone
-	}
 	delivery, err := time.Parse(time.RFC3339, in.DeliveryAt)
 	if err != nil {
 		http.Error(w, "delivery_at must be RFC3339", 400)
 		return
 	}
-	item, err := s.store.Create(r.Context(), reminders.CreateParams{Title: in.Title, Description: in.Description, CreatorID: in.CreatorID, GuildID: in.GuildID, ChannelID: channelID, MentionTarget: in.MentionTarget, DeliveryAt: delivery, Timezone: in.Timezone})
+	item, err := s.store.Create(r.Context(), reminders.CreateParams{Title: in.Title, Description: in.Description, CreatorID: in.CreatorID, GuildID: in.GuildID, ChannelID: channelID, MentionTarget: in.MentionTarget, DeliveryAt: delivery, Timezone: fixedTimezone})
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -276,11 +275,7 @@ func (s *Server) reschedule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delivery_at must be RFC3339", 400)
 		return
 	}
-	timezone := strings.TrimSpace(in.Timezone)
-	if timezone == "" {
-		timezone = item.Timezone
-	}
-	updated, err := s.store.Update(r.Context(), reminders.UpdateParams{ID: id, CreatorID: item.CreatorID, Title: item.Title, DeliveryAt: delivery, Timezone: timezone})
+	updated, err := s.store.Update(r.Context(), reminders.UpdateParams{ID: id, CreatorID: item.CreatorID, Title: item.Title, DeliveryAt: delivery, Timezone: fixedTimezone})
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -317,7 +312,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", 400)
 		return
 	}
-	item, err := s.users.CreateUser(r.Context(), users.CreateParams{DisplayName: in.DisplayName, DiscordUserID: in.DiscordUserID, Timezone: in.Timezone})
+	item, err := s.users.CreateUser(r.Context(), users.CreateParams{DisplayName: in.DisplayName, DiscordUserID: in.DiscordUserID, Timezone: fixedTimezone})
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -346,7 +341,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", 400)
 		return
 	}
-	item, err := s.users.UpdateUser(r.Context(), users.UpdateParams{ID: id, DisplayName: in.DisplayName, DiscordUserID: in.DiscordUserID, Timezone: in.Timezone})
+	item, err := s.users.UpdateUser(r.Context(), users.UpdateParams{ID: id, DisplayName: in.DisplayName, DiscordUserID: in.DiscordUserID, Timezone: fixedTimezone})
 	if err != nil {
 		status := 400
 		if errors.Is(err, users.ErrNotFound) {
@@ -549,7 +544,6 @@ button.danger{background:#c0392b}
 <form id="user-create">
 <input name="display" placeholder="Display name" maxlength="100" required>
 <input name="discord" placeholder="Discord user ID">
-<input name="timezone" value="America/New_York" required>
 <button>Create user</button>
 </form>
 <div id="users"></div>
@@ -565,7 +559,6 @@ button.danger{background:#c0392b}
 <input name="delivery" type="datetime-local" required>
 <select name="user" id="reminder-user" required></select>
 <select name="channel" id="reminder-channel" required></select>
-<input name="timezone" id="reminder-timezone" value="America/New_York" required>
 <button>Create reminder</button>
 </form>
 <div id="status" class="status"></div>
@@ -608,6 +601,7 @@ const csrf='{{CSRF}}';
 const isAdmin={{ADMIN}};
 const defaultReminderUser='jeay';
 const defaultReminderChannel='general-to-do-list';
+const fixedTimezone='America/New_York';
 let users=[];
 let channelGroups=[];
 let calendar;
@@ -630,8 +624,6 @@ function refreshReminderUser(){
   if(jeay)select.value=jeay.id;
  }
  reminderUserInitialized=true;
- const u=selectedUser();
- if(u)document.getElementById('reminder-timezone').value=u.timezone;
 }
 async function loadUsers(){
  const r=await api('/api/users');
@@ -665,7 +657,6 @@ function renderUsers(){
  box.innerHTML=users.map(u=>'<div class="user" data-id="'+esc(u.id)+'">'+
   '<input name="display" value="'+esc(u.display_name)+'" maxlength="100">'+
   '<input name="discord" value="'+esc(u.discord_user_id)+'" placeholder="Discord user ID">'+
-  '<input name="timezone" value="'+esc(u.timezone)+'">'+
   '<div class="actions"><button class="secondary" data-action="save" type="button">Save</button><button class="danger" data-action="delete" type="button">Delete</button></div>'+
   '</div>').join('');
 }
@@ -733,14 +724,14 @@ document.addEventListener('DOMContentLoaded',()=>{
  const sessionAction=document.getElementById('session-action');
  sessionAction.textContent=isAdmin?'Sign out':'Admin login';
  sessionAction.onclick=()=>isAdmin?api('/logout',{method:'POST'}).then(()=>location='/'):location='/login';
- document.getElementById('reminder-user').onchange=()=>{const u=selectedUser();if(u)document.getElementById('reminder-timezone').value=u.timezone};
+ document.getElementById('reminder-user').onchange=()=>{};
  document.getElementById('modal-close').onclick=hideReminderModal;
  document.getElementById('reminder-modal').onclick=e=>{if(e.target.id==='reminder-modal')hideReminderModal()};
  document.getElementById('modal-cancel-reminder').onclick=()=>{if(!selectedReminder)return;api('/api/reminders/'+selectedReminder.id+'/cancel',{method:'POST'}).then(r=>{if(!r.ok)throw Error('Cancel failed');hideReminderModal();calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)};
- document.getElementById('reschedule-form').onsubmit=e=>{e.preventDefault();if(!selectedReminder)return;const f=new FormData(e.target);api('/api/reminders/'+selectedReminder.id+'/reschedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:selectedReminder.extendedProps.timezone||document.getElementById('reminder-timezone').value})}).then(async r=>{if(!r.ok)throw Error(await r.text());hideReminderModal();calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)};
- document.getElementById('user-create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DisplayName:f.get('display'),DiscordUserID:f.get('discord'),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());e.target.reset();e.target.elements.timezone.value='America/New_York';return loadUsers()}).catch(e=>status.textContent=e.message)};
- document.getElementById('users').onclick=e=>{const btn=e.target.closest('button');if(!btn)return;const row=btn.closest('.user');const id=row.dataset.id;if(btn.dataset.action==='delete'){if(!confirm('Delete this user?'))return;api('/api/users/'+id,{method:'DELETE'}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message);return}const body={DisplayName:row.querySelector('[name=display]').value,DiscordUserID:row.querySelector('[name=discord]').value,Timezone:row.querySelector('[name=timezone]').value};api('/api/users/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message)};
- document.getElementById('create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const u=selectedUser();if(!u||!u.discord_user_id){status.textContent='Choose a linked Discord user to ping.';return}if(!f.get('channel')){status.textContent='Choose a channel.';return}api('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Title:f.get('title'),CreatorID:u.discord_user_id,ChannelID:f.get('channel'),DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());status.textContent='Reminder created.';e.target.elements.title.value='';resetCreateDelivery();calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)};
+ document.getElementById('reschedule-form').onsubmit=e=>{e.preventDefault();if(!selectedReminder)return;const f=new FormData(e.target);api('/api/reminders/'+selectedReminder.id+'/reschedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:fixedTimezone})}).then(async r=>{if(!r.ok)throw Error(await r.text());hideReminderModal();calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)};
+ document.getElementById('user-create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DisplayName:f.get('display'),DiscordUserID:f.get('discord'),Timezone:fixedTimezone})}).then(async r=>{if(!r.ok)throw Error(await r.text());e.target.reset();return loadUsers()}).catch(e=>status.textContent=e.message)};
+ document.getElementById('users').onclick=e=>{const btn=e.target.closest('button');if(!btn)return;const row=btn.closest('.user');const id=row.dataset.id;if(btn.dataset.action==='delete'){if(!confirm('Delete this user?'))return;api('/api/users/'+id,{method:'DELETE'}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message);return}const body={DisplayName:row.querySelector('[name=display]').value,DiscordUserID:row.querySelector('[name=discord]').value,Timezone:fixedTimezone};api('/api/users/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message)};
+ document.getElementById('create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const u=selectedUser();if(!u||!u.discord_user_id){status.textContent='Choose a linked Discord user to ping.';return}if(!f.get('channel')){status.textContent='Choose a channel.';return}api('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Title:f.get('title'),CreatorID:u.discord_user_id,ChannelID:f.get('channel'),DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:fixedTimezone})}).then(async r=>{if(!r.ok)throw Error(await r.text());status.textContent='Reminder created.';e.target.elements.title.value='';resetCreateDelivery();calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)};
  window.addEventListener('resize',()=>{const isCompact=compactCalendar();calendar.setOption('aspectRatio',isCompact?0.9:1.45);calendar.setOption('dayMaxEventRows',isCompact?1:3);if(isCompact!==wasCompact){calendar.setOption('headerToolbar',calendarToolbar());if(isCompact&&calendar.view.type==='dayGridMonth')calendar.changeView('listMonth');wasCompact=isCompact}calendar.updateSize()});
  Promise.all([loadUsers(),loadChannels()]).then(loadAdmin).catch(e=>status.textContent=e.message);
 });

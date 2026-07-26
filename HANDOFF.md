@@ -92,7 +92,6 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - `/remind complete`
 - `/reminders` owner-only all-current-reminders list
 - `/todo create`
-- `/timezone set`
 - `/chat reset`
 - `/privacy delete-my-data`
 - Natural-language reminder creation when the bot is mentioned
@@ -110,7 +109,7 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 ### Reminder delivery
 
 - PostgreSQL persistence
-- UTC storage with IANA timezone retention
+- UTC storage with fixed `America/New_York` reminder interpretation
 - Transactional due-row claiming using `FOR UPDATE SKIP LOCKED`
 - Retry backoff
 - Delivery attempt records and idempotency keys
@@ -139,7 +138,7 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - Admin-managed dashboard users with optional Discord user ID links
 - Public dashboard calendar and reminder creation; admin login is only required for user create/edit/delete.
 - Dashboard defaults reminder creation/filtering to Jeay and channel selection to `#general-to-do-list`, while all users and other channels remain selectable.
-- Dashboard shows reminders with target user, target channel, and a past-reminders toggle.
+- Dashboard shows reminders with target user and target channel; past reminders remain available by navigating/scrolling back.
 - Reminder creation
 - Click-to-cancel reminders
 - Status styling

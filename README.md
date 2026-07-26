@@ -10,7 +10,7 @@ The authoritative product and architecture plan is in [plan.md](plan.md).
 - Discord `/remind create`, `/remind list`, `/remind cancel`, and `/remind complete` commands.
 - Owner-only `/reminders` command to list all current reminders.
 - Discord `/remind edit` for rescheduling and renaming pending reminders.
-- `/todo create`, `/timezone set`, `/chat reset`, and `/privacy delete-my-data`.
+- `/todo create`, `/chat reset`, and `/privacy delete-my-data`.
 - Natural-language reminder creation and general chat when the bot is mentioned.
 - Low-cost `gpt-5-nano` default with AI-independent slash commands and delivery.
 - Transactional due-reminder claiming, retry backoff, and duplicate-delivery records.
@@ -18,7 +18,7 @@ The authoritative product and architecture plan is in [plan.md](plan.md).
 - Admin-managed dashboard users with optional Discord ID linking.
 - Public dashboard calendar/reminder creation using managed-user and live Discord-channel dropdowns.
 - Dashboard defaults reminder creation/filtering to Jeay and channel selection to `#general-to-do-list`, with all users and other channels still selectable.
-- Dashboard shows reminders with target user, target channel, and a past-reminders toggle.
+- Dashboard shows reminders with target user and target channel; past reminders remain available by navigating/scrolling back.
 - Health and readiness checks for Railway.
 - Admin-only dashboard health, reminder activity, and runtime log panels.
 - Structured Railway/stdout logs for AI responses, AI tool actions, slash commands, and reminder delivery.
@@ -83,13 +83,12 @@ Viewing the calendar and creating reminders from the dashboard do not require lo
 /remind complete id:abcd1234
 /reminders
 /todo create title:Prepare notes when:2026-07-18 16:00 user:@User channel:#reminders
-/timezone set name:America/New_York
 /chat reset
 /dashboard
 /privacy delete-my-data
 ```
 
-Times without an explicit offset use the user's saved IANA timezone. Discord displays created reminder timestamps in each viewer's local timezone. Reminder list commands include the target user, target channel, status, and scheduled time.
+Times without an explicit offset use `America/New_York`. Discord displays created reminder timestamps in each viewer's local timezone. Reminder list commands include the target user, target channel, status, and scheduled time.
 
 ## Security note
 
