@@ -528,6 +528,31 @@ func (b *Bot) sendCreationConfirmation(channelID, text string) {
 }
 
 func (b *Bot) botStatusMessage() string {
+	channelStatus := "unknown"
+	defaultChannelStatus := "unknown"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if groups, err := b.ListChannels(ctx); err != nil {
+		channelStatus = "error: " + truncate(err.Error(), 160)
+		defaultChannelStatus = "not checked"
+	} else {
+		count := 0
+		defaultVisible := false
+		for _, group := range groups {
+			for _, channel := range group.Channels {
+				count++
+				if strings.EqualFold(strings.TrimSpace(channel.Name), "general-to-do-list") {
+					defaultVisible = true
+				}
+			}
+		}
+		channelStatus = fmt.Sprintf("ok (%d accessible text/news channels)", count)
+		if defaultVisible {
+			defaultChannelStatus = "visible"
+		} else {
+			defaultChannelStatus = "not visible"
+		}
+	}
 	health := b.recorder.Health()
 	read := func(key string) string {
 		if value, ok := health[key]; ok {
@@ -540,10 +565,9 @@ func (b *Bot) botStatusMessage() string {
 		"• Discord connected: " + read("discord_connected"),
 		"• Scheduler: " + read("scheduler_status"),
 		"• OpenAI configured: " + read("openai_configured"),
-		"• Channel list: " + read("channel_list_status"),
-		"• Dashboard channel source: " + read("dashboard_channel_source"),
+		"• Channel list: " + channelStatus,
 		"• Default dashboard user: Jeay",
-		"• Default dashboard channel: #general-to-do-list",
+		"• Default dashboard channel: #general-to-do-list (" + defaultChannelStatus + ")",
 		"• Dashboard: " + b.dashboardMessage(),
 		"",
 		"I can create reminders, list/edit/cancel/complete reminders with slash commands, answer simple questions, show this sanitized status, and keep operational logs in Railway plus the admin dashboard.",
