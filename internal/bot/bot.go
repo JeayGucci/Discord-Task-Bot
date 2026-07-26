@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/google/uuid"
+	"github.com/jmantheitguy/Discord-Task-Bot/internal/channels"
 	ai "github.com/jmantheitguy/Discord-Task-Bot/internal/openai"
+	"github.com/jmantheitguy/Discord-Task-Bot/internal/ops"
 	"github.com/jmantheitguy/Discord-Task-Bot/internal/reminders"
 )
 
@@ -23,27 +26,23 @@ type Bot struct {
 	appID             string
 	guildID           string
 	ownerID           string
-	logChannelID      string
 	reminderChannelID string
 	streamURL         string
 	dashboardURL      string
 	logger            *slog.Logger
+	recorder          *ops.Recorder
 	commands          []*discordgo.ApplicationCommand
-	auditMu           sync.Mutex
-	auditWindow       time.Time
-	auditSent         int
-	auditDropped      int
 	reminderMu        sync.Mutex
 	nextReminder      time.Time
 }
 
-func New(token, appID, guildID, ownerID, logChannelID, reminderChannelID, streamURL, dashboardURL string, store reminders.Store, aiClient *ai.Client, logger *slog.Logger) (*Bot, error) {
+func New(token, appID, guildID, ownerID, reminderChannelID, streamURL, dashboardURL string, store reminders.Store, aiClient *ai.Client, logger *slog.Logger, recorder *ops.Recorder) (*Bot, error) {
 	s, err := discordgo.New("Bot " + token)
 	if err != nil {
 		return nil, err
 	}
 	s.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentMessageContent
-	b := &Bot{session: s, store: store, ai: aiClient, appID: appID, guildID: guildID, ownerID: ownerID, logChannelID: logChannelID, reminderChannelID: reminderChannelID, streamURL: streamURL, dashboardURL: dashboardURL, logger: logger, commands: commandDefinitions()}
+	b := &Bot{session: s, store: store, ai: aiClient, appID: appID, guildID: guildID, ownerID: ownerID, reminderChannelID: reminderChannelID, streamURL: streamURL, dashboardURL: dashboardURL, logger: logger, recorder: recorder, commands: commandDefinitions()}
 	s.AddHandler(b.onInteraction)
 	s.AddHandler(b.onMessage)
 	return b, nil
@@ -53,28 +52,31 @@ func (b *Bot) Open(ctx context.Context, registerCommands bool) error {
 	if err := b.session.Open(); err != nil {
 		return err
 	}
+	b.recorder.SetHealth("discord_connected", true)
+	b.recorder.SetHealth("discord_guild_scoped", b.guildID != "")
 	if registerCommands {
 		if _, err := b.session.ApplicationCommandBulkOverwrite(b.appID, b.guildID, b.commands); err != nil {
 			b.session.Close()
+			b.recorder.SetHealth("discord_connected", false)
 			return fmt.Errorf("register commands: %w", err)
 		}
 	}
 	b.logger.Info("discord bot connected", "guild_scoped", b.guildID != "", "register_commands", registerCommands)
+	b.recorder.Record("info", "discord", "bot connected", ops.Attributes("guild_scoped", b.guildID != "", "register_commands", registerCommands))
 	if b.streamURL != "" {
 		if !isDiscordStreamingURL(b.streamURL) {
 			b.logger.Warn("Discord streaming presence URL should be a Twitch or YouTube URL", "url", b.streamURL)
+			b.recorder.Record("warn", "discord", "streaming presence URL should be Twitch or YouTube", ops.Attributes("url", b.streamURL))
 		}
 		if err := b.session.UpdateStreamingStatus(0, "Streamlining your tasks", b.streamURL); err != nil {
 			b.logger.Warn("set Discord streaming presence", "error", err)
-			b.audit("⚠️ TaskBot connected, but its streaming presence could not be set.")
+			b.recorder.Record("warn", "discord", "set streaming presence failed", ops.Attributes("error", err.Error()))
+		} else {
+			b.recorder.SetHealth("discord_presence", "streaming")
 		}
 	} else {
 		b.logger.Warn("Discord streaming presence is disabled; set DISCORD_STREAM_URL to a Twitch or YouTube URL")
-	}
-	if registerCommands {
-		b.audit("✅ TaskBot connected and commands registered.")
-	} else {
-		b.audit("✅ TaskBot connected.")
+		b.recorder.Record("warn", "discord", "streaming presence is disabled", nil)
 	}
 	go func() { <-ctx.Done(); _ = b.session.Close() }()
 	return nil
@@ -87,21 +89,17 @@ func (b *Bot) SendReminder(ctx context.Context, r reminders.Reminder) (string, e
 		return "", err
 	}
 	content := strings.TrimSpace(r.MentionTarget + " Reminder: **" + r.Title + "**")
-	channelID := b.reminderChannel(r.ChannelID)
+	channelID := strings.TrimSpace(r.ChannelID)
+	if channelID == "" {
+		channelID = b.reminderChannelID
+	}
 	message, err := b.session.ChannelMessageSend(channelID, content)
 	if err != nil {
-		b.audit(fmt.Sprintf("❌ Reminder delivery failed · `%s` · channel <#%s>", r.ID.String()[:8], channelID))
+		b.recorder.Record("error", "reminder", "delivery failed", ops.Attributes("reminder_id", r.ID, "channel_id", channelID, "error", err.Error()))
 		return "", err
 	}
-	b.audit(fmt.Sprintf("🔔 Reminder delivered · `%s` · channel <#%s>", r.ID.String()[:8], channelID))
+	b.recorder.Record("info", "reminder", "delivered", ops.Attributes("reminder_id", r.ID, "channel_id", channelID, "discord_message_id", message.ID))
 	return message.ID, nil
-}
-
-func (b *Bot) reminderChannel(fallback string) string {
-	if strings.TrimSpace(b.reminderChannelID) != "" {
-		return b.reminderChannelID
-	}
-	return fallback
 }
 
 func (b *Bot) waitForReminderSlot(ctx context.Context) error {
@@ -126,6 +124,65 @@ func (b *Bot) waitForReminderSlot(ctx context.Context) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func (b *Bot) ListChannels(ctx context.Context) ([]channels.Group, error) {
+	if strings.TrimSpace(b.guildID) == "" {
+		return nil, errors.New("DISCORD_GUILD_ID is required to list channels")
+	}
+	guildChannels, err := b.session.GuildChannels(b.guildID, discordgo.WithContext(ctx))
+	if err != nil {
+		b.recorder.SetHealth("channel_list_status", "error")
+		b.recorder.SetHealth("channel_list_error", err.Error())
+		b.recorder.Record("warn", "discord", "list channels failed", ops.Attributes("error", err.Error()))
+		return nil, err
+	}
+	b.recorder.SetHealth("channel_list_status", "ok")
+	b.recorder.SetHealth("channel_list_count", len(guildChannels))
+	b.recorder.SetHealth("channel_list_checked_at", time.Now().UTC())
+	categories := map[string]*discordgo.Channel{}
+	textByParent := map[string][]*discordgo.Channel{}
+	for _, channel := range guildChannels {
+		switch channel.Type {
+		case discordgo.ChannelTypeGuildCategory:
+			categories[channel.ID] = channel
+		case discordgo.ChannelTypeGuildText, discordgo.ChannelTypeGuildNews:
+			textByParent[channel.ParentID] = append(textByParent[channel.ParentID], channel)
+		}
+	}
+	sortChannels := func(items []*discordgo.Channel) {
+		sort.SliceStable(items, func(i, j int) bool {
+			if items[i].Position == items[j].Position {
+				return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
+			}
+			return items[i].Position < items[j].Position
+		})
+	}
+	toChannels := func(items []*discordgo.Channel) []channels.Channel {
+		sortChannels(items)
+		result := make([]channels.Channel, 0, len(items))
+		for _, item := range items {
+			result = append(result, channels.Channel{ID: item.ID, Name: item.Name})
+		}
+		return result
+	}
+	result := make([]channels.Group, 0)
+	if uncategorized := toChannels(textByParent[""]); len(uncategorized) > 0 {
+		result = append(result, channels.Group{Name: "Uncategorized", Channels: uncategorized})
+	}
+	categoryList := make([]*discordgo.Channel, 0, len(categories))
+	for _, category := range categories {
+		categoryList = append(categoryList, category)
+	}
+	sortChannels(categoryList)
+	for _, category := range categoryList {
+		groupChannels := toChannels(textByParent[category.ID])
+		if len(groupChannels) == 0 {
+			continue
+		}
+		result = append(result, channels.Group{ID: category.ID, Name: category.Name, Channels: groupChannels})
+	}
+	return result, nil
 }
 
 func (b *Bot) allowed(userID string) bool { return b.ownerID == "" || b.ownerID == userID }
@@ -185,11 +242,11 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	}
 	if err != nil {
 		b.logger.Error("discord command", "command", data.Name, "error", err)
-		b.audit(fmt.Sprintf("❌ Command failed · `/%s` · user <@%s> · `%s`", data.Name, user.ID, truncate(err.Error(), 400)))
+		b.recorder.Record("error", "discord", "command failed", ops.Attributes("command", data.Name, "user_id", user.ID, "guild_id", i.GuildID, "channel_id", i.ChannelID, "error", err.Error()))
 		message = "I couldn't complete that request: " + err.Error()
 	} else {
 		b.logger.Info("discord command completed", "command", data.Name, "user_id", user.ID, "guild_id", i.GuildID, "channel_id", i.ChannelID)
-		b.audit(fmt.Sprintf("✅ Command completed · `/%s` · user <@%s>", data.Name, user.ID))
+		b.recorder.Record("info", "discord", "command completed", ops.Attributes("command", data.Name, "user_id", user.ID, "guild_id", i.GuildID, "channel_id", i.ChannelID))
 	}
 	b.respond(i, message, true)
 }
@@ -213,7 +270,7 @@ func (b *Bot) handleRemind(ctx context.Context, i *discordgo.InteractionCreate, 
 		}
 		lines := []string{"Your reminders:"}
 		for _, r := range items {
-			lines = append(lines, fmt.Sprintf("• `%s` **%s** — <t:%d:F> (%s)", r.ID.String()[:8], r.Title, r.DeliveryAt.Unix(), r.Status))
+			lines = append(lines, fmt.Sprintf("• `%s` <@%s> in <#%s> **%s** — <t:%d:F> (%s)", r.ID.String()[:8], r.CreatorID, r.ChannelID, r.Title, r.DeliveryAt.Unix(), r.Status))
 		}
 		return strings.Join(lines, "\n"), nil
 	case "cancel", "complete":
@@ -268,7 +325,7 @@ func (b *Bot) handleAllReminders(ctx context.Context, i *discordgo.InteractionCr
 	}
 	lines := []string{"Current reminders:"}
 	for _, r := range items {
-		lines = append(lines, fmt.Sprintf("• `%s` <@%s> **%s** — <t:%d:F> (%s)", r.ID.String()[:8], r.CreatorID, r.Title, r.DeliveryAt.Unix(), r.Status))
+		lines = append(lines, fmt.Sprintf("• `%s` <@%s> in <#%s> **%s** — <t:%d:F> (%s)", r.ID.String()[:8], r.CreatorID, r.ChannelID, r.Title, r.DeliveryAt.Unix(), r.Status))
 	}
 	return strings.Join(lines, "\n"), nil
 }
@@ -278,6 +335,10 @@ func (b *Bot) createFromOptions(ctx context.Context, i *discordgo.InteractionCre
 	if target == nil {
 		return "", errors.New("choose the Discord user to ping")
 	}
+	channelID := optionChannelID(options, "channel")
+	if channelID == "" {
+		return "", errors.New("choose the Discord channel for the reminder")
+	}
 	timezone, err := b.store.GetTimezone(ctx, target.ID, i.GuildID)
 	if err != nil {
 		return "", err
@@ -286,7 +347,6 @@ func (b *Bot) createFromOptions(ctx context.Context, i *discordgo.InteractionCre
 	if err != nil {
 		return "", err
 	}
-	channelID := b.reminderChannel(i.ChannelID)
 	r, err := b.store.Create(ctx, reminders.CreateParams{Title: optionString(options, "title"), CreatorID: target.ID, GuildID: i.GuildID, ChannelID: channelID, MentionTarget: "<@" + target.ID + ">", DeliveryAt: delivery, Timezone: timezone})
 	if err != nil {
 		return "", err
@@ -301,7 +361,9 @@ func (b *Bot) createFromOptions(ctx context.Context, i *discordgo.InteractionCre
 		"delivery_at", r.DeliveryAt,
 		"timezone", r.Timezone,
 	)
-	return fmt.Sprintf("Created **%s** for <@%s> at <t:%d:F>. ID: `%s`", r.Title, target.ID, r.DeliveryAt.Unix(), r.ID.String()[:8]), nil
+	b.recorder.Record("info", "reminder", "slash reminder created", ops.Attributes("reminder_id", r.ID, "title", r.Title, "user_id", target.ID, "guild_id", i.GuildID, "channel_id", channelID, "delivery_at", r.DeliveryAt, "timezone", r.Timezone))
+	b.sendCreationConfirmation(channelID, fmt.Sprintf("Created reminder **%s** for <@%s> at <t:%d:F>. ID: `%s`", r.Title, target.ID, r.DeliveryAt.Unix(), r.ID.String()[:8]))
+	return fmt.Sprintf("Created **%s** for <@%s> in <#%s> at <t:%d:F>. ID: `%s`", r.Title, target.ID, channelID, r.DeliveryAt.Unix(), r.ID.String()[:8]), nil
 }
 
 func (b *Bot) handleTimezone(ctx context.Context, userID string, options []*discordgo.ApplicationCommandInteractionDataOption) (string, error) {
@@ -343,7 +405,7 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 	result, err := b.ai.Respond(ctx, content, ai.Context{Now: time.Now(), Timezone: timezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID, PreviousResponseID: previousID})
 	if err != nil {
 		b.logger.Error("AI response", "error", err)
-		b.audit(fmt.Sprintf("❌ AI request failed · user <@%s> · `%s`", m.Author.ID, truncate(err.Error(), 400)))
+		b.recorder.Record("error", "ai", "AI request failed", ops.Attributes("user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "error", err.Error()))
 		b.reply(m, "AI chat is temporarily unavailable. Slash commands and existing reminders still work.")
 		return
 	}
@@ -356,6 +418,7 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		"has_tool_action", result.Action != nil,
 		"text", truncate(result.Text, 1000),
 	)
+	b.recorder.Record("info", "ai", "AI response received", ops.Attributes("user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "response_id", result.ResponseID, "has_tool_action", result.Action != nil, "text", truncate(result.Text, 1000)))
 	if result.ResponseID != "" {
 		if err := b.store.SaveConversation(ctx, m.Author.ID, m.GuildID, m.ChannelID, result.ResponseID, time.Now().Add(7*24*time.Hour)); err != nil {
 			b.logger.Warn("save conversation", "error", err)
@@ -374,8 +437,10 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		"tool", result.Action.Name,
 		"arguments", truncate(string(result.Action.Arguments), 1000),
 	)
+	b.recorder.Record("info", "ai", "AI tool action requested", ops.Attributes("user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "tool", result.Action.Name, "arguments", truncate(string(result.Action.Arguments), 1000)))
 	if result.Action.Name != "create_reminder" {
 		b.logger.Warn("unsupported AI tool action", "tool", result.Action.Name, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID)
+		b.recorder.Record("warn", "ai", "unsupported AI tool action", ops.Attributes("tool", result.Action.Name, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID))
 		b.reply(m, "I can't perform that action yet.")
 		return
 	}
@@ -393,10 +458,14 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		b.reply(m, "I need an exact date and time before creating that reminder.")
 		return
 	}
-	channelID := b.reminderChannel(m.ChannelID)
+	channelID := strings.TrimSpace(b.reminderChannelID)
+	if channelID == "" {
+		channelID = m.ChannelID
+	}
 	r, err := b.store.Create(ctx, reminders.CreateParams{Title: args.Title, Description: args.Description, CreatorID: m.Author.ID, GuildID: m.GuildID, ChannelID: channelID, MentionTarget: "<@" + m.Author.ID + ">", DeliveryAt: delivery, Timezone: timezone})
 	if err != nil {
 		b.logger.Error("AI reminder creation failed", "error", err, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID)
+		b.recorder.Record("error", "reminder", "AI reminder creation failed", ops.Attributes("error", err.Error(), "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID))
 		b.reply(m, "I couldn't create that reminder: "+err.Error())
 		return
 	}
@@ -410,7 +479,8 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		"delivery_at", r.DeliveryAt,
 		"timezone", r.Timezone,
 	)
-	b.audit(fmt.Sprintf("🤖 Natural-language reminder created · `%s` · user <@%s> · <t:%d:F>", r.ID.String()[:8], m.Author.ID, r.DeliveryAt.Unix()))
+	b.recorder.Record("info", "reminder", "AI reminder created", ops.Attributes("reminder_id", r.ID, "title", r.Title, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", channelID, "delivery_at", r.DeliveryAt, "timezone", r.Timezone))
+	b.sendCreationConfirmation(channelID, fmt.Sprintf("Created reminder **%s** for <@%s> at <t:%d:F>. ID: `%s`", r.Title, m.Author.ID, r.DeliveryAt.Unix(), r.ID.String()[:8]))
 	b.reply(m, fmt.Sprintf("Created **%s** for <t:%d:F>. ID: `%s`", r.Title, r.DeliveryAt.Unix(), r.ID.String()[:8]))
 }
 
@@ -443,38 +513,16 @@ func (b *Bot) startTyping(ctx context.Context, channelID string) func() {
 	return func() { close(done) }
 }
 
-func (b *Bot) audit(message string) {
-	if b.logChannelID == "" || b.session == nil {
+func (b *Bot) sendCreationConfirmation(channelID, text string) {
+	if strings.TrimSpace(channelID) == "" {
 		return
 	}
-	if !b.allowAuditMessage() {
-		return
-	}
-	if _, err := b.session.ChannelMessageSend(b.logChannelID, truncate(message, 1900)); err != nil {
-		b.logger.Warn("send Discord audit log", "error", err)
+	if _, err := b.session.ChannelMessageSend(channelID, truncate(text, 1900)); err != nil {
+		b.logger.Warn("send reminder creation confirmation", "channel_id", channelID, "error", err)
+		b.recorder.Record("warn", "discord", "send reminder creation confirmation failed", ops.Attributes("channel_id", channelID, "error", err.Error()))
 	}
 }
 
-func (b *Bot) allowAuditMessage() bool {
-	const maxPerMinute = 20
-	now := time.Now()
-	b.auditMu.Lock()
-	defer b.auditMu.Unlock()
-	if b.auditWindow.IsZero() || now.Sub(b.auditWindow) >= time.Minute {
-		if b.auditDropped > 0 {
-			b.logger.Warn("Discord audit messages dropped by local throttle", "count", b.auditDropped)
-		}
-		b.auditWindow = now
-		b.auditSent = 0
-		b.auditDropped = 0
-	}
-	if b.auditSent >= maxPerMinute {
-		b.auditDropped++
-		return false
-	}
-	b.auditSent++
-	return true
-}
 func (b *Bot) respond(i *discordgo.InteractionCreate, text string, ephemeral bool) {
 	flags := discordgo.MessageFlags(0)
 	if ephemeral {
@@ -511,6 +559,16 @@ func optionUser(s *discordgo.Session, options []*discordgo.ApplicationCommandInt
 		}
 	}
 	return nil
+}
+func optionChannelID(options []*discordgo.ApplicationCommandInteractionDataOption, name string) string {
+	for _, o := range options {
+		if o.Name == name {
+			if channel := o.ChannelValue(nil); channel != nil {
+				return channel.ID
+			}
+		}
+	}
+	return ""
 }
 func truncate(s string, max int) string {
 	r := []rune(s)
@@ -580,7 +638,10 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 	userOption := func(name, description string, required bool) *discordgo.ApplicationCommandOption {
 		return &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionUser, Name: name, Description: description, Required: required}
 	}
-	create := &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "create", Description: "Create a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("title", "What to remember", true), stringOption("when", "YYYY-MM-DD HH:MM in the target user's timezone", true), userOption("user", "Discord user to ping", true)}}
+	channelOption := func(name, description string, required bool) *discordgo.ApplicationCommandOption {
+		return &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionChannel, Name: name, Description: description, Required: required, ChannelTypes: []discordgo.ChannelType{discordgo.ChannelTypeGuildText, discordgo.ChannelTypeGuildNews}}
+	}
+	create := &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "create", Description: "Create a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("title", "What to remember", true), stringOption("when", "YYYY-MM-DD HH:MM in the target user's timezone", true), userOption("user", "Discord user to ping", true), channelOption("channel", "Channel where the reminder should post", true)}}
 	return []*discordgo.ApplicationCommand{
 		{Name: "remind", Description: "Manage reminders", Options: []*discordgo.ApplicationCommandOption{create, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "list", Description: "List your reminders"}, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "edit", Description: "Edit a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("id", "Reminder ID or prefix", true), stringOption("title", "Updated title", true), stringOption("when", "Updated YYYY-MM-DD HH:MM", true)}}, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "cancel", Description: "Cancel a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("id", "Reminder ID or prefix", true)}}, {Type: discordgo.ApplicationCommandOptionSubCommand, Name: "complete", Description: "Complete a reminder", Options: []*discordgo.ApplicationCommandOption{stringOption("id", "Reminder ID or prefix", true)}}}},
 		{Name: "reminders", Description: "Owner: list all current reminders"},

@@ -35,7 +35,7 @@ At the end of the original implementation session, GitHub CI passed, `/healthz` 
 12. Plaintext `DASHBOARD_PASSWORD` configuration is supported at the owner's request. A bcrypt hash remains supported as the safer alternative.
 13. Dashboard sessions are server-side, expire after 24 hours, use `HttpOnly`/`SameSite=Strict` cookies, and require CSRF tokens for mutations.
 14. The application uses `DATABASE_PUBLIC_URL` everywhere, not `DATABASE_URL`.
-15. Operational Discord audit logs go to channel `1526851837221671043`.
+15. Operational logs are visible in Railway stdout and the admin dashboard; Discord audit-channel posting is disabled.
 16. The bot uses a streaming presence labeled `Streamlining your tasks`; Discord only renders streaming presence for Twitch or YouTube URLs, configured with `DISCORD_STREAM_URL`.
 17. Functional behavior was prioritized over visual design. UI fine-tuning comes later.
 
@@ -47,7 +47,7 @@ These identifiers are public operational configuration, not credentials:
 Application ID: 1526848626150871112
 Guild ID:       1526434983823278202
 Owner user ID:  953631701056229426
-Log channel ID: 1526851837221671043
+Legacy log channel ID: 1526851837221671043
 ```
 
 The Discord bot token is sealed in Railway and is not stored here.
@@ -63,7 +63,7 @@ DISCORD_BOT_TOKEN=SEALED_IN_RAILWAY
 DISCORD_APPLICATION_ID=1526848626150871112
 DISCORD_GUILD_ID=1526434983823278202
 DISCORD_OWNER_ID=953631701056229426
-DISCORD_LOG_CHANNEL_ID=1526851837221671043
+DISCORD_LOG_CHANNEL_ID=1526851837221671043 # legacy/ignored; operational logs are dashboard + Railway
 DISCORD_REMINDER_CHANNEL_ID=1527575459595026513
 DISCORD_REGISTER_COMMANDS=false
 DISCORD_STREAM_URL=https://twitch.tv/your-channel
@@ -102,9 +102,9 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - Production command registration is opt-in through `DISCORD_REGISTER_COMMANDS=true`; leave it disabled for normal deploys.
 - Streaming activity configured through `DISCORD_STREAM_URL`
 - `/dashboard` command that returns the configured TaskBot dashboard URL
-- Slash reminder creation asks for the Discord user to ping; reminder delivery goes to `DISCORD_REMINDER_CHANNEL_ID`.
-- Privacy-conscious operational audit messages
-- Local throttling for Discord audit messages to avoid bursty REST calls
+- Slash reminder creation asks for the Discord user to ping and the Discord channel to post in; `DISCORD_REMINDER_CHANNEL_ID` is the fallback for older or natural-language reminders.
+- Discord-visible operational audit messages are disabled; created-reminder confirmations are posted in the selected reminder channel.
+- Admin-only dashboard health, reminder activity, and runtime log panels
 - Structured Railway/stdout logs for AI responses, AI tool actions, slash commands, and reminder delivery
 
 ### Reminder delivery
@@ -138,7 +138,8 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - FullCalendar month, week, and list views
 - Admin-managed dashboard users with optional Discord user ID links
 - Public dashboard calendar and reminder creation; admin login is only required for user create/edit/delete.
-- Dashboard shows all users' reminders by default, with a user filter and a past-reminders toggle.
+- Dashboard defaults reminder creation/filtering to Jeay and channel selection to `#general-to-do-list`, while all users and other channels remain selectable.
+- Dashboard shows reminders with target user, target channel, and a past-reminders toggle.
 - Reminder creation
 - Click-to-cancel reminders
 - Status styling
@@ -150,7 +151,7 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - `README.md`: setup, commands, and deployment documentation
 - `cmd/taskbot/main.go`: application composition and lifecycle
 - `cmd/hash-password/main.go`: optional bcrypt hash generator
-- `internal/bot/bot.go`: Discord commands, mentions, delivery, audit logging, and presence
+- `internal/bot/bot.go`: Discord commands, mentions, delivery, admin/Railway operational logging, and presence
 - `internal/openai/client.go`: Responses API client and tool schema
 - `internal/reminders/reminder.go`: reminder domain and store contract
 - `internal/database/postgres.go`: PostgreSQL implementation and migrations
@@ -202,7 +203,8 @@ git diff --check
 
 - The UI is intentionally utilitarian and needs visual/design refinement.
 - The dashboard is a single-owner local-account model rather than a full multi-user account system.
-- Dashboard reminder creation uses the fixed reminder channel and a user dropdown.
+- Dashboard reminder creation uses a user dropdown and live Discord channel dropdown grouped by category.
+- Runtime dashboard logs are process-local; Railway stdout remains the durable deploy log.
 - Dashboard-managed users must be linked to a Discord user ID before reminders can ping them.
 - Natural-language tools currently focus on reminder creation; conversational editing, listing, completion, and cancellation can be expanded.
 - Advanced recurrence is deferred.
@@ -228,7 +230,7 @@ The original conversation progressed through these milestones:
 11. Added support for plaintext password configuration at the owner's request.
 12. Renamed database configuration to `DATABASE_PUBLIC_URL` everywhere.
 13. Configured the production Railway variables and public domain.
-14. Added Discord audit-channel logging and the streaming dashboard presence.
+14. Added Discord audit-channel logging and the streaming dashboard presence. Audit-channel posting was later replaced with admin-dashboard logs.
 15. Committed, pushed, passed GitHub CI, and verified the live Railway health/readiness endpoints.
 
 For future work, read `plan.md`, this handoff, and `README.md` before changing architecture or scope.

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jmantheitguy/Discord-Task-Bot/internal/ops"
 	"github.com/jmantheitguy/Discord-Task-Bot/internal/reminders"
 )
 
@@ -27,10 +28,11 @@ type Scheduler struct {
 	interval time.Duration
 	limit    int
 	logger   *slog.Logger
+	recorder *ops.Recorder
 }
 
-func New(store Store, sender Sender, interval time.Duration, limit int, logger *slog.Logger) *Scheduler {
-	return &Scheduler{store: store, sender: sender, interval: interval, limit: limit, logger: logger}
+func New(store Store, sender Sender, interval time.Duration, limit int, logger *slog.Logger, recorder *ops.Recorder) *Scheduler {
+	return &Scheduler{store: store, sender: sender, interval: interval, limit: limit, logger: logger, recorder: recorder}
 }
 
 func (s *Scheduler) Run(ctx context.Context) {
@@ -48,9 +50,11 @@ func (s *Scheduler) Run(ctx context.Context) {
 }
 
 func (s *Scheduler) runOnce(ctx context.Context) {
+	s.recorder.LastSchedulerTick(ctx)
 	due, err := s.store.ClaimDue(ctx, time.Now(), s.limit)
 	if err != nil {
 		s.logger.Error("claim due reminders", "error", err)
+		s.recorder.Record("error", "scheduler", "claim due reminders failed", ops.Attributes("error", err.Error()))
 		return
 	}
 	for _, reminder := range due {
@@ -77,6 +81,7 @@ func (s *Scheduler) runOnce(ctx context.Context) {
 				"channel_id", reminder.ChannelID,
 				"discord_message_id", messageID,
 			)
+			s.recorder.Record("info", "reminder", "reminder delivered", ops.Attributes("reminder_id", reminder.ID, "creator_id", reminder.CreatorID, "guild_id", reminder.GuildID, "channel_id", reminder.ChannelID, "discord_message_id", messageID))
 			continue
 		}
 		minutes := math.Pow(2, float64(reminder.Attempts))
@@ -93,8 +98,10 @@ func (s *Scheduler) runOnce(ctx context.Context) {
 			"retry_at", retryAt,
 			"error", err,
 		)
+		s.recorder.Record("warn", "reminder", "reminder delivery failed", ops.Attributes("reminder_id", reminder.ID, "creator_id", reminder.CreatorID, "guild_id", reminder.GuildID, "channel_id", reminder.ChannelID, "retry_at", retryAt, "error", err.Error()))
 		if markErr := s.store.MarkFailed(ctx, reminder.ID, fmt.Errorf("discord delivery: %w", err), retryAt); markErr != nil {
 			s.logger.Error("mark reminder failed", "id", reminder.ID, "error", markErr)
+			s.recorder.Record("error", "scheduler", "mark reminder failed failed", ops.Attributes("reminder_id", reminder.ID, "error", markErr.Error()))
 		}
 	}
 }

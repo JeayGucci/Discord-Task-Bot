@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jmantheitguy/Discord-Task-Bot/internal/channels"
+	"github.com/jmantheitguy/Discord-Task-Bot/internal/ops"
 	"github.com/jmantheitguy/Discord-Task-Bot/internal/reminders"
 	"github.com/jmantheitguy/Discord-Task-Bot/internal/users"
 )
@@ -80,10 +82,23 @@ func (f *fakeSessions) GetDashboardSession(_ context.Context, h []byte) (string,
 }
 func (f *fakeSessions) DeleteDashboardSession(context.Context, []byte) error { return nil }
 
+type fakeChannels struct {
+	items []channels.Group
+	err   error
+}
+
+func (f fakeChannels) ListChannels(context.Context) ([]channels.Group, error) {
+	return f.items, f.err
+}
+
+func testServer(store *fakeStore, sessions SessionStore, channelProvider ChannelProvider) *Server {
+	return New(store, store, sessions, channelProvider, "admin", "", "right", "owner", "fixed-channel", "UTC", slog.Default(), ops.NewRecorder(50))
+}
+
 func TestLoginAndAuthenticatedAPI(t *testing.T) {
 	sessions := &fakeSessions{}
 	store := &fakeStore{}
-	s := New(store, store, sessions, "admin", "", "correct horse", "owner", "fixed-channel", "UTC", slog.Default())
+	s := New(store, store, sessions, nil, "admin", "", "correct horse", "owner", "fixed-channel", "UTC", slog.Default(), ops.NewRecorder(50))
 	handler := s.Handler()
 	req := httptest.NewRequest(http.MethodGet, "/api/reminders", nil)
 	rec := httptest.NewRecorder()
@@ -115,7 +130,7 @@ func TestLoginAndAuthenticatedAPI(t *testing.T) {
 
 func TestInvalidLogin(t *testing.T) {
 	store := &fakeStore{}
-	s := New(store, store, &fakeSessions{}, "admin", "", "right", "owner", "fixed-channel", "UTC", slog.Default())
+	s := testServer(store, &fakeSessions{}, nil)
 	form := url.Values{"username": {"admin"}, "password": {"wrong"}}
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -129,7 +144,7 @@ func TestInvalidLogin(t *testing.T) {
 func TestAuthenticatedUserAPI(t *testing.T) {
 	sessions := &fakeSessions{hash: hashToken("token"), username: "admin", csrf: "csrf", expires: time.Now().Add(time.Hour)}
 	store := &fakeStore{}
-	s := New(store, store, sessions, "admin", "", "right", "owner", "fixed-channel", "UTC", slog.Default())
+	s := testServer(store, sessions, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
 	req.AddCookie(&http.Cookie{Name: "taskbot_session", Value: "token"})
 	rec := httptest.NewRecorder()
@@ -149,8 +164,8 @@ func TestAuthenticatedUserAPI(t *testing.T) {
 
 func TestPublicReminderCreate(t *testing.T) {
 	store := &fakeStore{}
-	s := New(store, store, &fakeSessions{}, "admin", "", "right", "owner", "fixed-channel", "UTC", slog.Default())
-	req := httptest.NewRequest(http.MethodPost, "/api/reminders", strings.NewReader(`{"Title":"Public","CreatorID":"target","DeliveryAt":"2030-01-01T12:00:00Z","Timezone":"UTC"}`))
+	s := testServer(store, &fakeSessions{}, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/reminders", strings.NewReader(`{"Title":"Public","CreatorID":"target","ChannelID":"channel","DeliveryAt":"2030-01-01T12:00:00Z","Timezone":"UTC"}`))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -158,9 +173,20 @@ func TestPublicReminderCreate(t *testing.T) {
 	}
 }
 
+func TestPublicReminderCreateRequiresChannel(t *testing.T) {
+	store := &fakeStore{}
+	s := testServer(store, &fakeSessions{}, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/reminders", strings.NewReader(`{"Title":"Public","CreatorID":"target","DeliveryAt":"2030-01-01T12:00:00Z","Timezone":"UTC"}`))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("public create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestPublicReminderListCanShowAllUsers(t *testing.T) {
 	store := &fakeStore{}
-	s := New(store, store, &fakeSessions{}, "admin", "", "right", "owner", "fixed-channel", "UTC", slog.Default())
+	s := testServer(store, &fakeSessions{}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/reminders?all=true&start=2030-01-01T00:00:00Z&end=2030-02-01T00:00:00Z", nil)
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
@@ -169,5 +195,44 @@ func TestPublicReminderListCanShowAllUsers(t *testing.T) {
 	}
 	if store.lastList.CreatorID != "" {
 		t.Fatalf("creator=%q, want empty all-user filter", store.lastList.CreatorID)
+	}
+}
+
+func TestChannelFallbackWhenDiscordListFails(t *testing.T) {
+	store := &fakeStore{}
+	s := testServer(store, &fakeSessions{}, fakeChannels{err: errors.New("discord unavailable")})
+	req := httptest.NewRequest(http.MethodGet, "/api/channels", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("channels status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "fixed-channel") {
+		t.Fatalf("fallback channel missing: %s", rec.Body.String())
+	}
+}
+
+func TestDashboardContainsPermanentDefaults(t *testing.T) {
+	store := &fakeStore{}
+	s := testServer(store, &fakeSessions{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+	for _, want := range []string{"defaultReminderUser='jeay'", "defaultReminderChannel='general-to-do-list'"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing %q", want)
+		}
+	}
+}
+
+func TestAdminLogsRequireLogin(t *testing.T) {
+	store := &fakeStore{}
+	s := testServer(store, &fakeSessions{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/logs", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("admin logs status=%d", rec.Code)
 	}
 }

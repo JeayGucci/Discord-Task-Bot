@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jmantheitguy/Discord-Task-Bot/internal/ops"
 	"github.com/jmantheitguy/Discord-Task-Bot/internal/reminders"
 )
 
@@ -39,7 +40,7 @@ func (f fakeSender) SendReminder(context.Context, reminders.Reminder) (string, e
 func TestRunOnceMarksSent(t *testing.T) {
 	id := uuid.New()
 	store := &fakeStore{due: []reminders.Reminder{{ID: id}}}
-	s := New(store, fakeSender{}, time.Second, 1, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s := New(store, fakeSender{}, time.Second, 1, slog.New(slog.NewTextHandler(io.Discard, nil)), ops.NewRecorder(10))
 	s.runOnce(context.Background())
 	if store.sent != id {
 		t.Fatalf("sent=%s", store.sent)
@@ -49,7 +50,7 @@ func TestRunOnceMarksSent(t *testing.T) {
 func TestRunOnceMarksFailed(t *testing.T) {
 	id := uuid.New()
 	store := &fakeStore{due: []reminders.Reminder{{ID: id, Attempts: 1}}}
-	s := New(store, fakeSender{err: errors.New("nope")}, time.Second, 1, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s := New(store, fakeSender{err: errors.New("nope")}, time.Second, 1, slog.New(slog.NewTextHandler(io.Discard, nil)), ops.NewRecorder(10))
 	s.runOnce(context.Background())
 	if store.failed != id {
 		t.Fatalf("failed=%s", store.failed)

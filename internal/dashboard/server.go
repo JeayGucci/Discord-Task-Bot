@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jmantheitguy/Discord-Task-Bot/internal/channels"
+	"github.com/jmantheitguy/Discord-Task-Bot/internal/ops"
 	"github.com/jmantheitguy/Discord-Task-Bot/internal/reminders"
 	"github.com/jmantheitguy/Discord-Task-Bot/internal/users"
 	"golang.org/x/crypto/bcrypt"
@@ -30,27 +32,32 @@ type UserStore interface {
 	UpdateUser(context.Context, users.UpdateParams) (users.User, error)
 	DeleteUser(context.Context, uuid.UUID) error
 }
+type ChannelProvider interface {
+	ListChannels(context.Context) ([]channels.Group, error)
+}
 
 type Server struct {
 	store             reminders.Store
 	users             UserStore
 	db                Pinger
 	sessions          SessionStore
+	channelProvider   ChannelProvider
 	username          string
 	passwordHash      []byte
 	ownerID           string
 	reminderChannelID string
 	defaultTimezone   string
 	logger            *slog.Logger
+	recorder          *ops.Recorder
 }
 
-func New(store reminders.Store, db Pinger, sessions SessionStore, username, passwordHash, password, ownerID, reminderChannelID, defaultTimezone string, logger *slog.Logger) *Server {
+func New(store reminders.Store, db Pinger, sessions SessionStore, channelProvider ChannelProvider, username, passwordHash, password, ownerID, reminderChannelID, defaultTimezone string, logger *slog.Logger, recorder *ops.Recorder) *Server {
 	hash := []byte(passwordHash)
 	if len(hash) == 0 && password != "" {
 		hash, _ = bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	}
 	userStore, _ := store.(UserStore)
-	return &Server{store: store, users: userStore, db: db, sessions: sessions, username: username, passwordHash: hash, ownerID: ownerID, reminderChannelID: reminderChannelID, defaultTimezone: defaultTimezone, logger: logger}
+	return &Server{store: store, users: userStore, db: db, sessions: sessions, channelProvider: channelProvider, username: username, passwordHash: hash, ownerID: ownerID, reminderChannelID: reminderChannelID, defaultTimezone: defaultTimezone, logger: logger, recorder: recorder}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -63,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.auth(s.logout))
 	mux.HandleFunc("GET /", s.index)
+	mux.HandleFunc("GET /api/channels", s.listChannels)
 	mux.HandleFunc("GET /api/reminders", s.list)
 	mux.HandleFunc("POST /api/reminders", s.create)
 	mux.HandleFunc("POST /api/reminders/{id}/cancel", s.auth(s.cancel))
@@ -70,6 +78,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/users", s.auth(s.createUser))
 	mux.HandleFunc("PUT /api/users/{id}", s.auth(s.updateUser))
 	mux.HandleFunc("DELETE /api/users/{id}", s.auth(s.deleteUser))
+	mux.HandleFunc("GET /api/admin/health", s.auth(s.adminHealth))
+	mux.HandleFunc("GET /api/admin/logs", s.auth(s.adminLogs))
+	mux.HandleFunc("GET /api/admin/reminder-activity", s.auth(s.adminReminderActivity))
 	return requestLogger(s.logger, securityHeaders(mux))
 }
 
@@ -81,6 +92,26 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
+func (s *Server) listChannels(w http.ResponseWriter, r *http.Request) {
+	if s.channelProvider != nil {
+		items, err := s.channelProvider.ListChannels(r.Context())
+		if err == nil {
+			s.recorder.SetHealth("dashboard_channel_source", "discord")
+			writeJSON(w, 200, items)
+			return
+		}
+		s.logger.Warn("list Discord channels", "error", err)
+		s.recorder.Record("warn", "dashboard", "list Discord channels failed", ops.Attributes("error", err.Error()))
+	}
+	if strings.TrimSpace(s.reminderChannelID) == "" {
+		s.recorder.SetHealth("dashboard_channel_source", "empty")
+		writeJSON(w, 200, []channels.Group{})
+		return
+	}
+	s.recorder.SetHealth("dashboard_channel_source", "configured fallback")
+	writeJSON(w, 200, []channels.Group{{Name: "Configured default", Channels: []channels.Channel{{ID: s.reminderChannelID, Name: "default-reminder-channel"}}}})
 }
 func (s *Server) loginPage(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -169,7 +200,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, events)
 }
 func (s *Server) create(w http.ResponseWriter, r *http.Request) {
-	var in struct{ Title, Description, CreatorID, GuildID, MentionTarget, DeliveryAt, Timezone string }
+	var in struct{ Title, Description, CreatorID, GuildID, ChannelID, MentionTarget, DeliveryAt, Timezone string }
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&in) != nil {
 		http.Error(w, "invalid JSON", 400)
 		return
@@ -178,9 +209,9 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "choose a linked Discord user to ping", 400)
 		return
 	}
-	channelID := strings.TrimSpace(s.reminderChannelID)
+	channelID := strings.TrimSpace(in.ChannelID)
 	if channelID == "" {
-		http.Error(w, "reminder channel is not configured", 500)
+		http.Error(w, "choose a channel for the reminder", 400)
 		return
 	}
 	if in.MentionTarget == "" && in.CreatorID != "" {
@@ -200,6 +231,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logger.Info("dashboard reminder created", "reminder_id", item.ID, "title", item.Title, "creator_id", item.CreatorID, "guild_id", item.GuildID, "channel_id", channelID, "delivery_at", item.DeliveryAt)
+	s.recorder.Record("info", "reminder", "dashboard reminder created", ops.Attributes("reminder_id", item.ID, "title", item.Title, "creator_id", item.CreatorID, "guild_id", item.GuildID, "channel_id", channelID, "delivery_at", item.DeliveryAt, "timezone", item.Timezone))
 	writeJSON(w, 201, item)
 }
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
@@ -222,6 +254,7 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logger.Info("dashboard reminder cancelled", "reminder_id", id, "creator_id", item.CreatorID)
+	s.recorder.Record("info", "reminder", "dashboard reminder cancelled", ops.Attributes("reminder_id", id, "creator_id", item.CreatorID, "channel_id", item.ChannelID))
 	w.WriteHeader(204)
 }
 
@@ -258,6 +291,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logger.Info("dashboard user created", "user_id", item.ID, "display_name", item.DisplayName, "discord_user_id", item.DiscordUserID)
+	s.recorder.Record("info", "dashboard", "user created", ops.Attributes("user_id", item.ID, "display_name", item.DisplayName, "discord_user_id", item.DiscordUserID))
 	writeJSON(w, 201, item)
 }
 
@@ -290,6 +324,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logger.Info("dashboard user updated", "user_id", item.ID, "display_name", item.DisplayName, "discord_user_id", item.DiscordUserID)
+	s.recorder.Record("info", "dashboard", "user updated", ops.Attributes("user_id", item.ID, "display_name", item.DisplayName, "discord_user_id", item.DiscordUserID))
 	writeJSON(w, 200, item)
 }
 
@@ -316,7 +351,37 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logger.Info("dashboard user deleted", "user_id", id)
+	s.recorder.Record("info", "dashboard", "user deleted", ops.Attributes("user_id", id))
 	w.WriteHeader(204)
+}
+
+func (s *Server) adminHealth(w http.ResponseWriter, r *http.Request) {
+	health := s.recorder.Health()
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.db.Ping(ctx); err != nil {
+		health["database"] = "unavailable"
+		health["database_error"] = err.Error()
+	} else {
+		health["database"] = "ready"
+	}
+	health["default_user"] = "Jeay"
+	health["default_channel"] = "general-to-do-list"
+	health["dashboard_admin"] = true
+	writeJSON(w, 200, health)
+}
+
+func (s *Server) adminLogs(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, s.recorder.List(100))
+}
+
+func (s *Server) adminReminderActivity(w http.ResponseWriter, r *http.Request) {
+	items, err := s.store.List(r.Context(), reminders.ListFilter{From: time.Now().AddDate(0, -3, 0), Limit: 100})
+	if err != nil {
+		http.Error(w, "could not load reminder activity", 500)
+		return
+	}
+	writeJSON(w, 200, items)
 }
 
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
@@ -398,8 +463,10 @@ main{max-width:1180px;margin:24px auto;padding:0 20px}
 .card{background:white;padding:18px;border-radius:8px;box-shadow:0 3px 18px #17203315;margin-bottom:20px}
 h2{font-size:18px;margin:0 0 14px}
 form{display:grid;gap:10px}
-input,select,button{box-sizing:border-box;width:100%;font:inherit;padding:10px;border:1px solid #ccd2df;border-radius:7px}
-button{background:#5865f2;color:white;border:0;cursor:pointer}
+input,select{box-sizing:border-box;width:100%;font:inherit;padding:10px;border:1px solid #ccd2df;border-radius:7px}
+form button,.actions button,#session-action,#toggle-past{box-sizing:border-box;font:inherit;padding:10px;border-radius:7px;background:#5865f2;color:white;border:0;cursor:pointer}
+form button{width:100%}
+#session-action,#toggle-past,.actions button{width:auto}
 button.secondary{background:#eef1f8;color:#172033;border:1px solid #ccd2df}
 button.danger{background:#c0392b}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -407,10 +474,18 @@ button.danger{background:#c0392b}
 .user{border-top:1px solid #e5e8f0;padding:12px 0;display:grid;gap:8px}
 .user:first-child{border-top:0}
 .actions{display:flex;gap:8px}
+.admin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.metric{border-top:1px solid #e5e8f0;padding:8px 0}
+.metric:first-child{border-top:0}
+.metric b{display:block;font-size:12px;text-transform:uppercase;color:#5d6678}
+.log-list,.activity-list{display:grid;gap:8px;max-height:360px;overflow:auto}
+.log,.activity{border-top:1px solid #e5e8f0;padding:8px 0;font-size:13px}
+.log:first-child,.activity:first-child{border-top:0}
+.muted{color:#5d6678}
 .status-completed,.status-sent{opacity:.65}
 .status-failed{background:#c0392b!important}
 .status-cancelled{text-decoration:line-through;opacity:.5}
-@media(max-width:900px){.grid{grid-template-columns:1fr}.row{grid-template-columns:1fr}}
+@media(max-width:900px){.grid{grid-template-columns:1fr}.row{grid-template-columns:1fr}.admin-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -428,12 +503,17 @@ button.danger{background:#c0392b}
 </form>
 <div id="users"></div>
 </div>
+<div class="card" id="admin-health">
+<h2>Admin Health</h2>
+<div id="health"></div>
+</div>
 <div class="card">
 <h2>Create Reminder</h2>
 <form id="create">
 <input name="title" placeholder="Reminder title" maxlength="200" required>
 <input name="delivery" type="datetime-local" required>
 <select name="user" id="reminder-user" required></select>
+<select name="channel" id="reminder-channel" required></select>
 <input name="timezone" id="reminder-timezone" value="America/New_York" required>
 <button>Create reminder</button>
 </form>
@@ -441,15 +521,29 @@ button.danger{background:#c0392b}
 <button id="toggle-past" class="secondary" type="button">Show past reminders</button>
 </div>
 </section>
-<section class="card"><div id="calendar"></div></section>
+<section>
+<div class="card"><div id="calendar"></div></div>
+<div class="card" id="admin-activity">
+<h2>Reminder Activity</h2>
+<div id="activity" class="activity-list"></div>
+</div>
+<div class="card" id="admin-logs">
+<h2>Admin Logs</h2>
+<div id="logs" class="log-list"></div>
+</div>
+</section>
 </div>
 </main>
 <script>
 const csrf='{{CSRF}}';
 const isAdmin={{ADMIN}};
+const defaultReminderUser='jeay';
+const defaultReminderChannel='general-to-do-list';
 let users=[];
+let channelGroups=[];
 let calendar;
 let showPast=false;
+let reminderUserInitialized=false;
 const api=(p,o={})=>{o.headers={...(o.headers||{}),'X-CSRF-Token':csrf};return fetch(p,o)};
 const status=document.getElementById('status');
 function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -458,7 +552,13 @@ function refreshReminderUser(){
  const select=document.getElementById('reminder-user');
  const previous=select.value;
  select.innerHTML='<option value="">All reminders</option>'+users.filter(u=>u.discord_user_id).map(u=>'<option value="'+esc(u.id)+'">'+esc(u.display_name)+' ('+esc(u.discord_user_id)+')</option>').join('');
- if([...select.options].some(o=>o.value===previous))select.value=previous;
+ if(previous&&[...select.options].some(o=>o.value===previous)){
+  select.value=previous;
+ }else if(!reminderUserInitialized){
+  const jeay=users.find(u=>u.discord_user_id&&String(u.display_name||'').trim().toLowerCase()===defaultReminderUser);
+  if(jeay)select.value=jeay.id;
+ }
+ reminderUserInitialized=true;
  const u=selectedUser();
  if(u)document.getElementById('reminder-timezone').value=u.timezone;
 }
@@ -470,6 +570,25 @@ async function loadUsers(){
  refreshReminderUser();
  if(calendar)calendar.refetchEvents();
 }
+async function loadChannels(){
+ const r=await api('/api/channels');
+ if(!r.ok)throw Error(await r.text());
+ channelGroups=await r.json();
+ renderChannels();
+ if(calendar)calendar.rerenderEvents();
+}
+function renderChannels(){
+ const select=document.getElementById('reminder-channel');
+ const previous=select.value;
+ select.innerHTML='<option value="">Choose channel</option>'+channelGroups.map(g=>'<optgroup label="'+esc(g.name)+'">'+(g.channels||[]).map(c=>'<option value="'+esc(c.id)+'">#'+esc(c.name)+'</option>').join('')+'</optgroup>').join('');
+ const options=[...select.options];
+ if(previous&&options.some(o=>o.value===previous)){
+  select.value=previous;
+  return;
+ }
+ const general=options.find(o=>String(o.textContent||'').replace(/^#/,'').trim().toLowerCase()===defaultReminderChannel);
+ if(general)select.value=general.value;
+}
 function renderUsers(){
  const box=document.getElementById('users');
  box.innerHTML=users.map(u=>'<div class="user" data-id="'+esc(u.id)+'">'+
@@ -479,14 +598,35 @@ function renderUsers(){
   '<div class="actions"><button class="secondary" data-action="save" type="button">Save</button><button class="danger" data-action="delete" type="button">Delete</button></div>'+
   '</div>').join('');
 }
+function renderHealth(data){
+ const box=document.getElementById('health');
+ box.innerHTML=Object.keys(data).sort().map(k=>'<div class="metric"><b>'+esc(k.replaceAll('_',' '))+'</b><span>'+esc(data[k])+'</span></div>').join('');
+}
+function renderLogs(items){
+ document.getElementById('logs').innerHTML=(items||[]).map(x=>'<div class="log"><b>'+esc(x.level)+' '+esc(x.source)+'</b> <span class="muted">'+esc(new Date(x.time).toLocaleString())+'</span><br>'+esc(x.message)+(x.attributes?' <span class="muted">'+esc(JSON.stringify(x.attributes))+'</span>':'')+'</div>').join('');
+}
+function renderActivity(items){
+ document.getElementById('activity').innerHTML=(items||[]).map(r=>'<div class="activity"><b>'+esc(r.status)+'</b> <span class="muted">'+esc(new Date(r.delivery_at).toLocaleString())+'</span><br>'+esc(r.title)+' for <code>'+esc(r.creator_id)+'</code> in <code>#'+esc(channelName(r.channel_id))+'</code></div>').join('');
+}
+function channelName(id){
+ for(const group of channelGroups){for(const channel of (group.channels||[])){if(channel.id===id)return channel.name}}
+ return id||'unknown';
+}
+async function loadAdmin(){
+ if(!isAdmin)return;
+ const [health,logs,activity]=await Promise.all([api('/api/admin/health').then(r=>r.json()),api('/api/admin/logs').then(r=>r.json()),api('/api/admin/reminder-activity').then(r=>r.json())]);
+ renderHealth(health);
+ renderLogs(logs);
+ renderActivity(activity);
+}
 document.addEventListener('DOMContentLoaded',()=>{
  calendar=new FullCalendar.Calendar(document.getElementById('calendar'),{initialView:'dayGridMonth',headerToolbar:{left:'prev,next today',center:'title',right:'dayGridMonth,timeGridWeek,listMonth'},events:(i,ok,fail)=>{
   const u=selectedUser();
   const creator=u&&u.discord_user_id?u.discord_user_id:'';
   api('/api/reminders?start='+encodeURIComponent(i.startStr)+'&end='+encodeURIComponent(i.endStr)+'&creator_id='+encodeURIComponent(creator)+'&all='+(creator===''?'true':'false')+'&past='+showPast).then(r=>r.ok?r.json():Promise.reject(Error('Unable to load reminders'))).then(ok).catch(fail)
- },eventClick:i=>{if(confirm('Cancel '+i.event.title+'?'))api('/api/reminders/'+i.event.id+'/cancel',{method:'POST'}).then(r=>{if(!r.ok)throw Error('Cancel failed');calendar.refetchEvents()}).catch(e=>status.textContent=e.message)}});
+ },eventContent:i=>{const r=i.event.extendedProps;return {html:'<b>'+esc(i.event.title)+'</b><br><span>'+esc(r.creator_id||'')+' · #'+esc(channelName(r.channel_id||''))+'</span>'}},eventClick:i=>{if(confirm('Cancel '+i.event.title+'?'))api('/api/reminders/'+i.event.id+'/cancel',{method:'POST'}).then(r=>{if(!r.ok)throw Error('Cancel failed');calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)}});
  calendar.render();
- if(!isAdmin)document.getElementById('admin-users').hidden=true;
+ if(!isAdmin){document.getElementById('admin-users').hidden=true;document.getElementById('admin-health').hidden=true;document.getElementById('admin-activity').hidden=true;document.getElementById('admin-logs').hidden=true}
  const sessionAction=document.getElementById('session-action');
  sessionAction.textContent=isAdmin?'Sign out':'Admin login';
  sessionAction.onclick=()=>isAdmin?api('/logout',{method:'POST'}).then(()=>location='/'):location='/login';
@@ -494,8 +634,8 @@ document.addEventListener('DOMContentLoaded',()=>{
  document.getElementById('toggle-past').onclick=e=>{showPast=!showPast;e.target.textContent=showPast?'Show current reminders':'Show past reminders';calendar.changeView(showPast?'listMonth':'dayGridMonth');calendar.refetchEvents()};
  document.getElementById('user-create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DisplayName:f.get('display'),DiscordUserID:f.get('discord'),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());e.target.reset();e.target.elements.timezone.value='America/New_York';return loadUsers()}).catch(e=>status.textContent=e.message)};
  document.getElementById('users').onclick=e=>{const btn=e.target.closest('button');if(!btn)return;const row=btn.closest('.user');const id=row.dataset.id;if(btn.dataset.action==='delete'){if(!confirm('Delete this user?'))return;api('/api/users/'+id,{method:'DELETE'}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message);return}const body={DisplayName:row.querySelector('[name=display]').value,DiscordUserID:row.querySelector('[name=discord]').value,Timezone:row.querySelector('[name=timezone]').value};api('/api/users/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message)};
- document.getElementById('create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const u=selectedUser();if(!u||!u.discord_user_id){status.textContent='Choose a linked Discord user to ping.';return}api('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Title:f.get('title'),CreatorID:u.discord_user_id,DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());status.textContent='Reminder created.';e.target.elements.title.value='';calendar.refetchEvents()}).catch(e=>status.textContent=e.message)};
- loadUsers().catch(e=>status.textContent=e.message);
+ document.getElementById('create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const u=selectedUser();if(!u||!u.discord_user_id){status.textContent='Choose a linked Discord user to ping.';return}if(!f.get('channel')){status.textContent='Choose a channel.';return}api('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Title:f.get('title'),CreatorID:u.discord_user_id,ChannelID:f.get('channel'),DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());status.textContent='Reminder created.';e.target.elements.title.value='';calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)};
+ Promise.all([loadUsers(),loadChannels()]).then(loadAdmin).catch(e=>status.textContent=e.message);
 });
 </script>
 </body>

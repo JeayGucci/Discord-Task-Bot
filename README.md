@@ -16,11 +16,14 @@ The authoritative product and architecture plan is in [plan.md](plan.md).
 - Transactional due-reminder claiming, retry backoff, and duplicate-delivery records.
 - Local-login calendar dashboard and session-protected reminder API.
 - Admin-managed dashboard users with optional Discord ID linking.
-- Public dashboard calendar/reminder creation using a managed-user dropdown.
-- Dashboard shows all users' reminders by default, with a user filter and a past-reminders toggle.
+- Public dashboard calendar/reminder creation using managed-user and live Discord-channel dropdowns.
+- Dashboard defaults reminder creation/filtering to Jeay and channel selection to `#general-to-do-list`, with all users and other channels still selectable.
+- Dashboard shows reminders with target user, target channel, and a past-reminders toggle.
 - Health and readiness checks for Railway.
-- Privacy-conscious operational audit messages in a configured Discord channel.
-- Reminder pings are delivered to the fixed `DISCORD_REMINDER_CHANNEL_ID` channel.
+- Admin-only dashboard health, reminder activity, and runtime log panels.
+- Structured Railway/stdout logs for AI responses, AI tool actions, slash commands, and reminder delivery.
+- Reminder pings are delivered to the selected Discord channel; `DISCORD_REMINDER_CHANNEL_ID` is a fallback for older or natural-language reminders.
+- Discord-visible operational audit messages are disabled; created-reminder confirmations are posted in the selected reminder channel.
 - Discord streaming presence labeled “Streamlining your tasks”.
 - `/dashboard` command that returns the private dashboard URL.
 - Docker, local PostgreSQL, and GitHub Actions CI.
@@ -45,11 +48,11 @@ The service applies versioned SQL migrations at startup. If Discord credentials 
 1. Create an application and bot in the Discord Developer Portal.
 2. Enable the Message Content intent so mentions can be interpreted.
 3. Invite the bot with `bot` and `applications.commands` scopes.
-4. Grant Send Messages, Read Message History, and Use Slash Commands permissions.
+4. Grant View Channels, Send Messages, Read Message History, and Use Slash Commands permissions for every category/channel the bot should list or post into.
 5. Set `DISCORD_BOT_TOKEN` and `DISCORD_APPLICATION_ID`.
 6. During development, set `DISCORD_GUILD_ID` to a private test server for immediate command updates.
 7. Set `DISCORD_OWNER_ID` to your user ID to keep the initial bot private.
-8. Set `DISCORD_REMINDER_CHANNEL_ID` to the channel where reminders should ping.
+8. Set `DISCORD_REMINDER_CHANNEL_ID` as the fallback channel for older or natural-language reminders.
 9. `DISCORD_REGISTER_COMMANDS` defaults to enabled outside production and disabled in production. Temporarily set it to `true` in production only when slash command definitions need to be pushed, then turn it back off.
 10. Set `DISCORD_STREAM_URL` to a Twitch or YouTube URL if you want the bot to show a streaming presence. Discord does not render arbitrary URLs as streaming.
 11. Put `DASHBOARD_BASE_URL` in the bot profile description in the Developer Portal if you want it visible on the bot profile.
@@ -67,26 +70,26 @@ The service applies versioned SQL migrations at startup. If Discord credentials 
 
 Do not commit `.env`, Discord tokens, OpenAI keys, or production database URLs.
 
-The dashboard login remains a single admin account. From the dashboard, the admin can create managed users, optionally link each one to a Discord user ID, and create reminders for linked Discord users.
-Viewing the calendar and creating reminders from the dashboard do not require login; only user create/edit/delete actions require the admin account.
+The dashboard login remains a single admin account. From the dashboard, the admin can create managed users, optionally link each one to a Discord user ID, and view health/log/activity panels.
+Viewing the calendar and creating reminders from the dashboard do not require login; user management and operational logs require the admin account.
 
 ## Commands
 
 ```text
-/remind create title:Finish SOAP note when:2026-07-18 16:00 user:@User
+/remind create title:Finish SOAP note when:2026-07-18 16:00 user:@User channel:#reminders
 /remind list
 /remind edit id:abcd1234 title:Finish SOAP note when:2026-07-18 18:00
 /remind cancel id:abcd1234
 /remind complete id:abcd1234
 /reminders
-/todo create title:Prepare notes when:2026-07-18 16:00 user:@User
+/todo create title:Prepare notes when:2026-07-18 16:00 user:@User channel:#reminders
 /timezone set name:America/New_York
 /chat reset
 /dashboard
 /privacy delete-my-data
 ```
 
-Times without an explicit offset use the user's saved IANA timezone. Discord displays created reminder timestamps in each viewer's local timezone.
+Times without an explicit offset use the user's saved IANA timezone. Discord displays created reminder timestamps in each viewer's local timezone. Reminder list commands include the target user, target channel, status, and scheduled time.
 
 ## Security note
 
