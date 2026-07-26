@@ -46,6 +46,8 @@ type Usage struct {
 	OutputTokens int `json:"output_tokens"`
 }
 
+const responseMaxOutputTokens = 4096
+
 func New(apiKey, model, baseURL string) *Client {
 	return &Client{apiKey: apiKey, model: model, baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: 45 * time.Second}}
 }
@@ -65,7 +67,7 @@ Use create_reminder when the user clearly asks for a reminder and gives or impli
 		"model":             c.model,
 		"instructions":      system,
 		"input":             message,
-		"max_output_tokens": 1200,
+		"max_output_tokens": responseMaxOutputTokens,
 		"safety_identifier": safetyIdentifier(meta.UserID),
 		"tools": []any{
 			map[string]any{
@@ -94,6 +96,9 @@ Use create_reminder when the user clearly asks for a reminder and gives or impli
 			},
 		},
 	}
+	if supportsReasoningEffort(c.model) {
+		body["reasoning"] = map[string]any{"effort": "minimal"}
+	}
 	if meta.PreviousResponseID != "" {
 		body["previous_response_id"] = meta.PreviousResponseID
 	}
@@ -120,10 +125,14 @@ Use create_reminder when the user clearly asks for a reminder and gives or impli
 		return Result{}, fmt.Errorf("OpenAI API returned %d: %s", resp.StatusCode, compact(data, 500))
 	}
 	var wire struct {
-		ID         string            `json:"id"`
-		OutputText string            `json:"output_text"`
-		Usage      Usage             `json:"usage"`
-		Output     []json.RawMessage `json:"output"`
+		ID                string            `json:"id"`
+		OutputText        string            `json:"output_text"`
+		Usage             Usage             `json:"usage"`
+		Output            []json.RawMessage `json:"output"`
+		Status            string            `json:"status"`
+		IncompleteDetails struct {
+			Reason string `json:"reason"`
+		} `json:"incomplete_details"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return Result{}, err
@@ -135,9 +144,17 @@ Use create_reminder when the user clearly asks for a reminder and gives or impli
 		}
 	}
 	if result.Text == "" {
+		if wire.Status == "incomplete" && wire.IncompleteDetails.Reason != "" {
+			return Result{}, fmt.Errorf("OpenAI response incomplete: %s", wire.IncompleteDetails.Reason)
+		}
 		return Result{}, fmt.Errorf("OpenAI returned no usable output: %s", compact(data, 800))
 	}
 	return result, nil
+}
+
+func supportsReasoningEffort(model string) bool {
+	name := strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(name, "gpt-5") || strings.HasPrefix(name, "o1") || strings.HasPrefix(name, "o3") || strings.HasPrefix(name, "o4")
 }
 
 func inspectOutputItem(raw json.RawMessage, result *Result) bool {

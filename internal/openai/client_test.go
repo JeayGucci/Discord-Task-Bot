@@ -28,7 +28,10 @@ func TestRespondParsesFunctionCall(t *testing.T) {
 		}
 		var request struct {
 			MaxOutputTokens int `json:"max_output_tokens"`
-			Tools           []struct {
+			Reasoning       struct {
+				Effort string `json:"effort"`
+			} `json:"reasoning"`
+			Tools []struct {
 				Name       string `json:"name"`
 				Parameters struct {
 					Required []string `json:"required"`
@@ -41,6 +44,9 @@ func TestRespondParsesFunctionCall(t *testing.T) {
 		if request.MaxOutputTokens < 1000 {
 			t.Fatalf("max_output_tokens = %d, want at least 1000", request.MaxOutputTokens)
 		}
+		if request.Reasoning.Effort != "minimal" {
+			t.Fatalf("reasoning effort = %q, want minimal", request.Reasoning.Effort)
+		}
 		for _, tool := range request.Tools {
 			if tool.Name == "get_bot_status" && tool.Parameters.Required == nil {
 				t.Error("get_bot_status tool does not declare required")
@@ -50,7 +56,7 @@ func TestRespondParsesFunctionCall(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"resp_123","output":[{"type":"function_call","name":"create_reminder","arguments":{"title":"Test","description":"","delivery_at":"2030-01-01T12:00:00-05:00"}}],"usage":{"input_tokens":20,"output_tokens":10}}`))
 	}))
 	defer server.Close()
-	c := New("test-key", "test-model", server.URL)
+	c := New("test-key", "gpt-5-nano", server.URL)
 	result, err := c.Respond(context.Background(), "remind me", Context{Now: time.Now(), Timezone: "America/New_York", UserID: "1"})
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +66,19 @@ func TestRespondParsesFunctionCall(t *testing.T) {
 	}
 	if result.ResponseID != "resp_123" {
 		t.Fatalf("response ID = %q", result.ResponseID)
+	}
+}
+
+func TestRespondReportsIncompleteReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_incomplete","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[]}`))
+	}))
+	defer server.Close()
+	c := New("test-key", "gpt-5-nano", server.URL)
+	_, err := c.Respond(context.Background(), "hello", Context{Now: time.Now(), Timezone: "America/New_York", UserID: "1"})
+	if err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
+		t.Fatalf("error = %v, want max_output_tokens incomplete reason", err)
 	}
 }
 
