@@ -458,9 +458,11 @@ const adminHTML = `<!doctype html>
 body{font-family:system-ui;margin:0;background:#f4f6fa;color:#172033}
 header{padding:18px 28px;background:#5865f2;color:white;display:flex;justify-content:space-between;align-items:center;gap:16px}
 header h1{font-size:22px;margin:0}
-main{max-width:1180px;margin:24px auto;padding:0 20px}
-.grid{display:grid;grid-template-columns:380px 1fr;gap:20px;align-items:start}
+main{max-width:1280px;margin:24px auto;padding:0 20px}
+.grid{display:grid;grid-template-columns:minmax(340px,410px) minmax(0,1fr);gap:20px;align-items:start}
+.sidebar{position:sticky;top:16px}
 .card{background:white;padding:18px;border-radius:8px;box-shadow:0 3px 18px #17203315;margin-bottom:20px}
+.calendar-card{padding:16px}
 h2{font-size:18px;margin:0 0 14px}
 form{display:grid;gap:10px}
 input,select{box-sizing:border-box;width:100%;font:inherit;padding:10px;border:1px solid #ccd2df;border-radius:7px}
@@ -485,17 +487,20 @@ button.danger{background:#c0392b}
 .status-completed,.status-sent{opacity:.65}
 .status-failed{background:#c0392b!important}
 .status-cancelled{text-decoration:line-through;opacity:.5}
+.fc{font-size:14px}
 .fc .fc-toolbar{flex-wrap:wrap;gap:8px}
 .fc .fc-toolbar-chunk{display:flex;align-items:center}
-@media(max-width:900px){.grid{grid-template-columns:1fr}.row{grid-template-columns:1fr}.admin-grid{grid-template-columns:1fr}}
-@media(max-width:600px){.fc .fc-toolbar{align-items:flex-start}.fc .fc-toolbar-title{font-size:28px}.fc .fc-button{padding:7px 9px}}
+.fc .fc-daygrid-day-frame{min-height:104px}
+.fc .fc-daygrid-event{white-space:normal;line-height:1.25}
+@media(max-width:900px){main{margin:12px auto;padding:0 12px}.grid{grid-template-columns:1fr}.sidebar{position:static;order:2}.calendar-column{order:1}.row{grid-template-columns:1fr}.admin-grid{grid-template-columns:1fr}}
+@media(max-width:600px){header{padding:14px 16px}header h1{font-size:18px}.card{padding:14px}.calendar-card{padding:10px}.fc .fc-toolbar{align-items:flex-start}.fc .fc-toolbar-title{font-size:24px}.fc .fc-button{padding:8px 10px}.fc .fc-daygrid-day-frame{min-height:82px}.fc .fc-col-header-cell-cushion,.fc .fc-daygrid-day-number{padding:6px}.fc .fc-daygrid-event{font-size:12px}}
 </style>
 </head>
 <body>
 <header><h1>TaskBot Dashboard</h1><button id="session-action">Admin login</button></header>
 <main>
 <div class="grid">
-<section>
+<section class="sidebar">
 <div class="card" id="admin-users">
 <h2>Managed Users</h2>
 <form id="user-create">
@@ -524,8 +529,8 @@ button.danger{background:#c0392b}
 <button id="toggle-past" class="secondary" type="button">Show past reminders</button>
 </div>
 </section>
-<section>
-<div class="card"><div id="calendar"></div></div>
+<section class="calendar-column">
+<div class="card calendar-card"><div id="calendar"></div></div>
 <div class="card" id="admin-activity">
 <h2>Reminder Activity</h2>
 <div id="activity" class="activity-list"></div>
@@ -547,6 +552,7 @@ let channelGroups=[];
 let calendar;
 let showPast=false;
 let reminderUserInitialized=false;
+const compactCalendar=()=>window.matchMedia('(max-width: 640px)').matches;
 const api=(p,o={})=>{o.headers={...(o.headers||{}),'X-CSRF-Token':csrf};return fetch(p,o)};
 const status=document.getElementById('status');
 function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -623,7 +629,7 @@ async function loadAdmin(){
  renderActivity(activity);
 }
 document.addEventListener('DOMContentLoaded',()=>{
- calendar=new FullCalendar.Calendar(document.getElementById('calendar'),{initialView:'dayGridMonth',customButtons:{prevText:{text:'<',click:()=>calendar.prev()},nextText:{text:'>',click:()=>calendar.next()}},headerToolbar:{left:'prevText,nextText today',center:'title',right:'dayGridMonth,timeGridWeek,listMonth'},events:(i,ok,fail)=>{
+ calendar=new FullCalendar.Calendar(document.getElementById('calendar'),{initialView:'dayGridMonth',height:'auto',expandRows:true,aspectRatio:compactCalendar()?0.72:1.45,dayMaxEventRows:compactCalendar()?2:3,customButtons:{prevText:{text:'<',click:()=>calendar.prev()},nextText:{text:'>',click:()=>calendar.next()}},headerToolbar:{left:'prevText,nextText today',center:'title',right:'dayGridMonth,timeGridWeek,listMonth'},events:(i,ok,fail)=>{
   api('/api/reminders?start='+encodeURIComponent(i.startStr)+'&end='+encodeURIComponent(i.endStr)+'&all=true&past='+showPast).then(r=>r.ok?r.json():Promise.reject(Error('Unable to load reminders'))).then(ok).catch(fail)
  },eventContent:i=>{const r=i.event.extendedProps;return {html:'<b>'+esc(i.event.title)+'</b><br><span>'+esc(r.creator_id||'')+' · #'+esc(channelName(r.channel_id||''))+'</span>'}},eventClick:i=>{if(confirm('Cancel '+i.event.title+'?'))api('/api/reminders/'+i.event.id+'/cancel',{method:'POST'}).then(r=>{if(!r.ok)throw Error('Cancel failed');calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)}});
  calendar.render();
@@ -636,6 +642,7 @@ document.addEventListener('DOMContentLoaded',()=>{
  document.getElementById('user-create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DisplayName:f.get('display'),DiscordUserID:f.get('discord'),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());e.target.reset();e.target.elements.timezone.value='America/New_York';return loadUsers()}).catch(e=>status.textContent=e.message)};
  document.getElementById('users').onclick=e=>{const btn=e.target.closest('button');if(!btn)return;const row=btn.closest('.user');const id=row.dataset.id;if(btn.dataset.action==='delete'){if(!confirm('Delete this user?'))return;api('/api/users/'+id,{method:'DELETE'}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message);return}const body={DisplayName:row.querySelector('[name=display]').value,DiscordUserID:row.querySelector('[name=discord]').value,Timezone:row.querySelector('[name=timezone]').value};api('/api/users/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message)};
  document.getElementById('create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const u=selectedUser();if(!u||!u.discord_user_id){status.textContent='Choose a linked Discord user to ping.';return}if(!f.get('channel')){status.textContent='Choose a channel.';return}api('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Title:f.get('title'),CreatorID:u.discord_user_id,ChannelID:f.get('channel'),DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());status.textContent='Reminder created.';e.target.elements.title.value='';calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)};
+ window.addEventListener('resize',()=>{calendar.setOption('aspectRatio',compactCalendar()?0.72:1.45);calendar.setOption('dayMaxEventRows',compactCalendar()?2:3);calendar.updateSize()});
  Promise.all([loadUsers(),loadChannels()]).then(loadAdmin).catch(e=>status.textContent=e.message);
 });
 </script>
