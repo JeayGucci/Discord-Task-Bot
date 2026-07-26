@@ -403,6 +403,14 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		b.logger.Warn("load conversation", "error", err)
 	}
 	result, err := b.ai.Respond(ctx, content, ai.Context{Now: time.Now(), Timezone: timezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID, PreviousResponseID: previousID})
+	if err != nil && previousID != "" && strings.Contains(err.Error(), "No tool output found") {
+		b.logger.Warn("reset stale AI conversation after missing tool output", "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "previous_response_id", previousID)
+		b.recorder.Record("warn", "ai", "reset stale AI conversation after missing tool output", ops.Attributes("user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "previous_response_id", previousID))
+		if resetErr := b.store.ResetConversation(ctx, m.Author.ID, m.ChannelID); resetErr != nil {
+			b.logger.Warn("reset stale AI conversation", "error", resetErr)
+		}
+		result, err = b.ai.Respond(ctx, content, ai.Context{Now: time.Now(), Timezone: timezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID})
+	}
 	if err != nil {
 		b.logger.Error("AI response", "error", err)
 		b.recorder.Record("error", "ai", "AI request failed", ops.Attributes("user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "error", err.Error()))
@@ -419,12 +427,12 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		"text", truncate(result.Text, 1000),
 	)
 	b.recorder.Record("info", "ai", "AI response received", ops.Attributes("user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "response_id", result.ResponseID, "has_tool_action", result.Action != nil, "text", truncate(result.Text, 1000)))
-	if result.ResponseID != "" {
-		if err := b.store.SaveConversation(ctx, m.Author.ID, m.GuildID, m.ChannelID, result.ResponseID, time.Now().Add(7*24*time.Hour)); err != nil {
-			b.logger.Warn("save conversation", "error", err)
-		}
-	}
 	if result.Action == nil {
+		if result.ResponseID != "" {
+			if err := b.store.SaveConversation(ctx, m.Author.ID, m.GuildID, m.ChannelID, result.ResponseID, time.Now().Add(7*24*time.Hour)); err != nil {
+				b.logger.Warn("save conversation", "error", err)
+			}
+		}
 		b.logger.Info("AI chat reply sent", "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID)
 		b.reply(m, truncate(result.Text, 1900))
 		return
