@@ -492,8 +492,11 @@ button.danger{background:#c0392b}
 .fc .fc-toolbar-chunk{display:flex;align-items:center}
 .fc .fc-daygrid-day-frame{min-height:104px}
 .fc .fc-daygrid-event{white-space:normal;line-height:1.25}
+.event-title{font-weight:700}
+.event-meta{color:#5d6678;font-size:12px;margin-top:2px}
+.fc-list-event .event-title{font-size:14px}
 @media(max-width:900px){main{margin:12px auto;padding:0 12px}.grid{grid-template-columns:1fr}.sidebar{position:static;order:2}.calendar-column{order:1}.row{grid-template-columns:1fr}.admin-grid{grid-template-columns:1fr}}
-@media(max-width:600px){header{padding:14px 16px}header h1{font-size:18px}.card{padding:14px}.calendar-card{padding:10px}.fc .fc-toolbar{align-items:flex-start}.fc .fc-toolbar-title{font-size:24px}.fc .fc-button{padding:8px 10px}.fc .fc-daygrid-day-frame{min-height:82px}.fc .fc-col-header-cell-cushion,.fc .fc-daygrid-day-number{padding:6px}.fc .fc-daygrid-event{font-size:12px}}
+@media(max-width:600px){header{padding:14px 16px}header h1{font-size:18px}.card{padding:14px}.calendar-card{padding:10px}.fc .fc-toolbar{align-items:flex-start}.fc .fc-toolbar-title{font-size:24px}.fc .fc-button{padding:8px 10px}.fc .fc-daygrid-day-frame{min-height:76px}.fc .fc-col-header-cell-cushion,.fc .fc-daygrid-day-number{padding:6px}.fc .fc-daygrid-event{font-size:12px}.fc .fc-list-day-cushion{padding:10px}.fc .fc-list-event td{padding:10px 8px}}
 </style>
 </head>
 <body>
@@ -553,6 +556,7 @@ let calendar;
 let showPast=false;
 let reminderUserInitialized=false;
 const compactCalendar=()=>window.matchMedia('(max-width: 640px)').matches;
+const calendarToolbar=()=>compactCalendar()?{left:'prevText,nextText today',center:'title',right:'listMonth,dayGridMonth'}:{left:'prevText,nextText today',center:'title',right:'dayGridMonth,timeGridWeek,listMonth'};
 const api=(p,o={})=>{o.headers={...(o.headers||{}),'X-CSRF-Token':csrf};return fetch(p,o)};
 const status=document.getElementById('status');
 function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -621,6 +625,15 @@ function channelName(id){
  for(const group of channelGroups){for(const channel of (group.channels||[])){if(channel.id===id)return channel.name}}
  return id||'unknown';
 }
+function userName(id){
+ const user=users.find(u=>u.discord_user_id===id);
+ return user?user.display_name:id;
+}
+function calendarEventContent(i){
+ const r=i.event.extendedProps;
+ if(String(i.view.type||'').startsWith('dayGrid'))return {html:'<span class="event-title">'+esc(i.event.title)+'</span>'};
+ return {html:'<div class="event-title">'+esc(i.event.title)+'</div><div class="event-meta">'+esc(userName(r.creator_id||''))+' · #'+esc(channelName(r.channel_id||''))+'</div>'};
+}
 async function loadAdmin(){
  if(!isAdmin)return;
  const [health,logs,activity]=await Promise.all([api('/api/admin/health').then(r=>r.json()),api('/api/admin/logs').then(r=>r.json()),api('/api/admin/reminder-activity').then(r=>r.json())]);
@@ -629,20 +642,21 @@ async function loadAdmin(){
  renderActivity(activity);
 }
 document.addEventListener('DOMContentLoaded',()=>{
- calendar=new FullCalendar.Calendar(document.getElementById('calendar'),{initialView:'dayGridMonth',height:'auto',expandRows:true,aspectRatio:compactCalendar()?0.72:1.45,dayMaxEventRows:compactCalendar()?2:3,customButtons:{prevText:{text:'<',click:()=>calendar.prev()},nextText:{text:'>',click:()=>calendar.next()}},headerToolbar:{left:'prevText,nextText today',center:'title',right:'dayGridMonth,timeGridWeek,listMonth'},events:(i,ok,fail)=>{
+ let wasCompact=compactCalendar();
+ calendar=new FullCalendar.Calendar(document.getElementById('calendar'),{initialView:wasCompact?'listMonth':'dayGridMonth',height:'auto',expandRows:true,aspectRatio:wasCompact?0.9:1.45,dayMaxEventRows:wasCompact?1:3,customButtons:{prevText:{text:'<',click:()=>calendar.prev()},nextText:{text:'>',click:()=>calendar.next()}},headerToolbar:calendarToolbar(),events:(i,ok,fail)=>{
   api('/api/reminders?start='+encodeURIComponent(i.startStr)+'&end='+encodeURIComponent(i.endStr)+'&all=true&past='+showPast).then(r=>r.ok?r.json():Promise.reject(Error('Unable to load reminders'))).then(ok).catch(fail)
- },eventContent:i=>{const r=i.event.extendedProps;return {html:'<b>'+esc(i.event.title)+'</b><br><span>'+esc(r.creator_id||'')+' · #'+esc(channelName(r.channel_id||''))+'</span>'}},eventClick:i=>{if(confirm('Cancel '+i.event.title+'?'))api('/api/reminders/'+i.event.id+'/cancel',{method:'POST'}).then(r=>{if(!r.ok)throw Error('Cancel failed');calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)}});
+ },eventContent:calendarEventContent,eventClick:i=>{if(confirm('Cancel '+i.event.title+'?'))api('/api/reminders/'+i.event.id+'/cancel',{method:'POST'}).then(r=>{if(!r.ok)throw Error('Cancel failed');calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)}});
  calendar.render();
  if(!isAdmin){document.getElementById('admin-users').hidden=true;document.getElementById('admin-health').hidden=true;document.getElementById('admin-activity').hidden=true;document.getElementById('admin-logs').hidden=true}
  const sessionAction=document.getElementById('session-action');
  sessionAction.textContent=isAdmin?'Sign out':'Admin login';
  sessionAction.onclick=()=>isAdmin?api('/logout',{method:'POST'}).then(()=>location='/'):location='/login';
  document.getElementById('reminder-user').onchange=()=>{const u=selectedUser();if(u)document.getElementById('reminder-timezone').value=u.timezone};
- document.getElementById('toggle-past').onclick=e=>{showPast=!showPast;e.target.textContent=showPast?'Show current reminders':'Show past reminders';calendar.changeView(showPast?'listMonth':'dayGridMonth');calendar.refetchEvents()};
+ document.getElementById('toggle-past').onclick=e=>{showPast=!showPast;e.target.textContent=showPast?'Show current reminders':'Show past reminders';calendar.changeView(showPast?'listMonth':(compactCalendar()?'listMonth':'dayGridMonth'));calendar.refetchEvents()};
  document.getElementById('user-create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DisplayName:f.get('display'),DiscordUserID:f.get('discord'),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());e.target.reset();e.target.elements.timezone.value='America/New_York';return loadUsers()}).catch(e=>status.textContent=e.message)};
  document.getElementById('users').onclick=e=>{const btn=e.target.closest('button');if(!btn)return;const row=btn.closest('.user');const id=row.dataset.id;if(btn.dataset.action==='delete'){if(!confirm('Delete this user?'))return;api('/api/users/'+id,{method:'DELETE'}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message);return}const body={DisplayName:row.querySelector('[name=display]').value,DiscordUserID:row.querySelector('[name=discord]').value,Timezone:row.querySelector('[name=timezone]').value};api('/api/users/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message)};
  document.getElementById('create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const u=selectedUser();if(!u||!u.discord_user_id){status.textContent='Choose a linked Discord user to ping.';return}if(!f.get('channel')){status.textContent='Choose a channel.';return}api('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Title:f.get('title'),CreatorID:u.discord_user_id,ChannelID:f.get('channel'),DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());status.textContent='Reminder created.';e.target.elements.title.value='';calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)};
- window.addEventListener('resize',()=>{calendar.setOption('aspectRatio',compactCalendar()?0.72:1.45);calendar.setOption('dayMaxEventRows',compactCalendar()?2:3);calendar.updateSize()});
+ window.addEventListener('resize',()=>{const isCompact=compactCalendar();calendar.setOption('aspectRatio',isCompact?0.9:1.45);calendar.setOption('dayMaxEventRows',isCompact?1:3);if(isCompact!==wasCompact){calendar.setOption('headerToolbar',calendarToolbar());if(isCompact&&calendar.view.type==='dayGridMonth')calendar.changeView('listMonth');wasCompact=isCompact}calendar.updateSize()});
  Promise.all([loadUsers(),loadChannels()]).then(loadAdmin).catch(e=>status.textContent=e.message);
 });
 </script>
