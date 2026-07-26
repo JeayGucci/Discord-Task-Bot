@@ -438,6 +438,10 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		"arguments", truncate(string(result.Action.Arguments), 1000),
 	)
 	b.recorder.Record("info", "ai", "AI tool action requested", ops.Attributes("user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "tool", result.Action.Name, "arguments", truncate(string(result.Action.Arguments), 1000)))
+	if result.Action.Name == "get_bot_status" {
+		b.reply(m, b.botStatusMessage())
+		return
+	}
 	if result.Action.Name != "create_reminder" {
 		b.logger.Warn("unsupported AI tool action", "tool", result.Action.Name, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID)
 		b.recorder.Record("warn", "ai", "unsupported AI tool action", ops.Attributes("tool", result.Action.Name, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID))
@@ -521,6 +525,30 @@ func (b *Bot) sendCreationConfirmation(channelID, text string) {
 		b.logger.Warn("send reminder creation confirmation", "channel_id", channelID, "error", err)
 		b.recorder.Record("warn", "discord", "send reminder creation confirmation failed", ops.Attributes("channel_id", channelID, "error", err.Error()))
 	}
+}
+
+func (b *Bot) botStatusMessage() string {
+	health := b.recorder.Health()
+	read := func(key string) string {
+		if value, ok := health[key]; ok {
+			return fmt.Sprint(value)
+		}
+		return "unknown"
+	}
+	lines := []string{
+		"TaskBot status:",
+		"• Discord connected: " + read("discord_connected"),
+		"• Scheduler: " + read("scheduler_status"),
+		"• OpenAI configured: " + read("openai_configured"),
+		"• Channel list: " + read("channel_list_status"),
+		"• Dashboard channel source: " + read("dashboard_channel_source"),
+		"• Default dashboard user: Jeay",
+		"• Default dashboard channel: #general-to-do-list",
+		"• Dashboard: " + b.dashboardMessage(),
+		"",
+		"I can create reminders, list/edit/cancel/complete reminders with slash commands, answer simple questions, show this sanitized status, and keep operational logs in Railway plus the admin dashboard.",
+	}
+	return truncate(strings.Join(lines, "\n"), 1900)
 }
 
 func (b *Bot) respond(i *discordgo.InteractionCreate, text string, ephemeral bool) {

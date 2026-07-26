@@ -17,7 +17,10 @@ func TestRespondParsesFunctionCall(t *testing.T) {
 		}
 		body, _ := io.ReadAll(r.Body)
 		if !strings.Contains(string(body), "create_reminder") {
-			t.Error("request does not contain tool")
+			t.Error("request does not contain create_reminder tool")
+		}
+		if !strings.Contains(string(body), "get_bot_status") {
+			t.Error("request does not contain get_bot_status tool")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"resp_123","output":[{"type":"function_call","name":"create_reminder","arguments":{"title":"Test","description":"","delivery_at":"2030-01-01T12:00:00-05:00"}}],"usage":{"input_tokens":20,"output_tokens":10}}`))

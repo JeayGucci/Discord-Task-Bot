@@ -56,26 +56,46 @@ func (c *Client) Respond(ctx context.Context, message string, meta Context) (Res
 	if !c.Enabled() {
 		return Result{}, errors.New("AI chat is not configured")
 	}
-	system := fmt.Sprintf(`You are TaskBot, a concise Discord assistant. Current time is %s and the user's IANA timezone is %s. Use create_reminder only when the user clearly asks to schedule a future reminder. Never claim an action succeeded; the application reports execution results. Ask a concise clarification question if the title or exact future time is missing. For ordinary conversation, answer normally. Do not provide professional medical advice.`, meta.Now.In(mustLocation(meta.Timezone)).Format(time.RFC3339), meta.Timezone)
+	system := fmt.Sprintf(`You are TaskBot, a concise Discord bot that helps with reminders, to-dos, dashboard troubleshooting, and lightweight chat. Current time is %s and the user's IANA timezone is %s.
+
+Capabilities:
+- Create one future reminder with create_reminder when the user clearly provides a title and exact future time.
+- Check sanitized runtime health with get_bot_status when the user asks whether the bot, dashboard, Discord connection, OpenAI, scheduler, channels, or reminder delivery are working.
+- Explain available slash commands: /remind create, /remind list, /remind edit, /remind cancel, /remind complete, /reminders, /todo create, /timezone set, /chat reset, /dashboard, and /privacy delete-my-data.
+- Explain that dashboard reminder creation defaults to Jeay and #general-to-do-list when configured.
+
+Never claim an action succeeded; the application reports execution results. Ask a concise clarification question if the reminder title or exact future time is missing. Do not reveal secrets, tokens, passwords, raw environment values, or private system details. For ordinary conversation, answer normally and concisely. Do not provide professional medical advice.`, meta.Now.In(mustLocation(meta.Timezone)).Format(time.RFC3339), meta.Timezone)
 	body := map[string]any{
 		"model":             c.model,
 		"instructions":      system,
 		"input":             message,
 		"max_output_tokens": 500,
 		"safety_identifier": safetyIdentifier(meta.UserID),
-		"tools": []any{map[string]any{
-			"type": "function", "name": "create_reminder",
-			"description": "Create one reminder only after the user clearly provides a title and future delivery time.",
-			"parameters": map[string]any{
-				"type": "object", "additionalProperties": false,
-				"properties": map[string]any{
-					"title":       map[string]any{"type": "string"},
-					"description": map[string]any{"type": "string"},
-					"delivery_at": map[string]any{"type": "string", "description": "RFC3339 timestamp with UTC offset"},
+		"tools": []any{
+			map[string]any{
+				"type": "function", "name": "create_reminder",
+				"description": "Create one reminder only after the user clearly provides a title and future delivery time.",
+				"parameters": map[string]any{
+					"type": "object", "additionalProperties": false,
+					"properties": map[string]any{
+						"title":       map[string]any{"type": "string"},
+						"description": map[string]any{"type": "string"},
+						"delivery_at": map[string]any{"type": "string", "description": "RFC3339 timestamp with UTC offset"},
+					},
+					"required": []string{"title", "description", "delivery_at"},
 				},
-				"required": []string{"title", "description", "delivery_at"},
 			},
-		}},
+			map[string]any{
+				"type":        "function",
+				"name":        "get_bot_status",
+				"description": "Read sanitized TaskBot runtime status for Discord, dashboard, OpenAI, scheduler, channels, and recent operational logs.",
+				"parameters": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"properties":           map[string]any{},
+				},
+			},
+		},
 	}
 	if meta.PreviousResponseID != "" {
 		body["previous_response_id"] = meta.PreviousResponseID
