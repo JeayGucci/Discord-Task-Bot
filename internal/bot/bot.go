@@ -40,7 +40,7 @@ type Bot struct {
 
 const fixedTimezone = "America/New_York"
 
-var relativeReminderPattern = regexp.MustCompile(`\bin\s+([a-z0-9]+)\s+(minute|minutes|min|mins|hour|hours|hr|hrs|day|days|week|weeks)\b`)
+var relativeReminderPattern = regexp.MustCompile(`\b(?:(?:in|after|for)\s+)?([a-z0-9]+)\s+(minute|minutes|min|mins|hour|hours|hr|hrs|day|days|week|weeks)(?:\s+from\s+now)?\b`)
 
 func New(token, appID, guildID, ownerID, reminderChannelID, streamURL, dashboardURL string, store reminders.Store, aiClient *ai.Client, logger *slog.Logger, recorder *ops.Recorder) (*Bot, error) {
 	s, err := discordgo.New("Bot " + token)
@@ -461,10 +461,15 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 	}
 	delivery, err := time.Parse(time.RFC3339, args.DeliveryAt)
 	if forceTool == "create_reminder" {
-		if inferred, inferErr := parseRelativeReminderTime(content, fixedTimezone, requestNow); inferErr == nil {
+		inferred, inferErr := parseRelativeReminderTime(content, fixedTimezone, requestNow)
+		if inferErr == nil {
 			delivery = inferred
 			err = nil
 			b.recorder.Record("info", "reminder", "used deterministic relative reminder time", ops.Attributes("user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "content", truncate(content, 200), "delivery_at", delivery))
+		} else if hasRelativeReminderTimeHint(content) {
+			b.recorder.Record("warn", "reminder", "could not parse relative reminder time", ops.Attributes("user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "content", truncate(content, 200), "error", inferErr.Error()))
+			b.reply(m, "I could not parse that relative time. Try `in 1 minute`, `in 2 hours`, or use an exact date and time.")
+			return
 		}
 	}
 	if err != nil || !delivery.After(requestNow) {
@@ -512,6 +517,10 @@ func looksLikeReminderRequest(content string) bool {
 		}
 	}
 	return false
+}
+
+func hasRelativeReminderTimeHint(content string) bool {
+	return relativeReminderPattern.MatchString(strings.ToLower(content))
 }
 
 func parseRelativeReminderTime(content, timezone string, now time.Time) (time.Time, error) {
