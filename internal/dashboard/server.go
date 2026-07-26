@@ -73,7 +73,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/channels", s.listChannels)
 	mux.HandleFunc("GET /api/reminders", s.list)
 	mux.HandleFunc("POST /api/reminders", s.create)
-	mux.HandleFunc("POST /api/reminders/{id}/cancel", s.auth(s.cancel))
+	mux.HandleFunc("POST /api/reminders/{id}/cancel", s.cancel)
+	mux.HandleFunc("POST /api/reminders/{id}/reschedule", s.reschedule)
 	mux.HandleFunc("GET /api/users", s.listUsers)
 	mux.HandleFunc("POST /api/users", s.auth(s.createUser))
 	mux.HandleFunc("PUT /api/users/{id}", s.auth(s.updateUser))
@@ -235,10 +236,6 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, item)
 }
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid CSRF token", 403)
-		return
-	}
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "invalid reminder ID", 400)
@@ -256,6 +253,41 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("dashboard reminder cancelled", "reminder_id", id, "creator_id", item.CreatorID)
 	s.recorder.Record("info", "reminder", "dashboard reminder cancelled", ops.Attributes("reminder_id", id, "creator_id", item.CreatorID, "channel_id", item.ChannelID))
 	w.WriteHeader(204)
+}
+
+func (s *Server) reschedule(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "invalid reminder ID", 400)
+		return
+	}
+	var in struct{ DeliveryAt, Timezone string }
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&in) != nil {
+		http.Error(w, "invalid JSON", 400)
+		return
+	}
+	item, err := s.store.Get(r.Context(), id)
+	if err != nil {
+		http.Error(w, "reminder not found", 404)
+		return
+	}
+	delivery, err := time.Parse(time.RFC3339, in.DeliveryAt)
+	if err != nil {
+		http.Error(w, "delivery_at must be RFC3339", 400)
+		return
+	}
+	timezone := strings.TrimSpace(in.Timezone)
+	if timezone == "" {
+		timezone = item.Timezone
+	}
+	updated, err := s.store.Update(r.Context(), reminders.UpdateParams{ID: id, CreatorID: item.CreatorID, Title: item.Title, DeliveryAt: delivery, Timezone: timezone})
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	s.logger.Info("dashboard reminder rescheduled", "reminder_id", id, "creator_id", updated.CreatorID, "delivery_at", updated.DeliveryAt)
+	s.recorder.Record("info", "reminder", "dashboard reminder rescheduled", ops.Attributes("reminder_id", id, "creator_id", updated.CreatorID, "channel_id", updated.ChannelID, "delivery_at", updated.DeliveryAt))
+	writeJSON(w, 200, updated)
 }
 
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
@@ -466,9 +498,9 @@ main{max-width:1280px;margin:24px auto;padding:0 20px}
 h2{font-size:18px;margin:0 0 14px}
 form{display:grid;gap:10px}
 input,select{box-sizing:border-box;width:100%;font:inherit;padding:10px;border:1px solid #ccd2df;border-radius:7px}
-form button,.actions button,#session-action,#toggle-past{box-sizing:border-box;font:inherit;padding:10px;border-radius:7px;background:#5865f2;color:white;border:0;cursor:pointer}
+form button,.actions button,#session-action,.modal-actions button{box-sizing:border-box;font:inherit;padding:10px;border-radius:7px;background:#5865f2;color:white;border:0;cursor:pointer}
 form button{width:100%}
-#session-action,#toggle-past,.actions button{width:auto}
+#session-action,.actions button,.modal-actions button{width:auto}
 button.secondary{background:#eef1f8;color:#172033;border:1px solid #ccd2df}
 button.danger{background:#c0392b}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -495,6 +527,14 @@ button.danger{background:#c0392b}
 .event-title{font-weight:700}
 .event-meta{color:#5d6678;font-size:12px;margin-top:2px}
 .fc-list-event .event-title{font-size:14px}
+.modal-backdrop{position:fixed;inset:0;background:#17203380;display:grid;place-items:center;padding:18px;z-index:10}
+.modal{background:white;border-radius:8px;box-shadow:0 18px 60px #17203350;width:min(440px,100%);padding:20px}
+.modal h2{margin-bottom:8px}
+.modal dl{display:grid;grid-template-columns:90px 1fr;gap:8px;margin:14px 0}
+.modal dt{font-weight:700;color:#5d6678}
+.modal dd{margin:0;overflow-wrap:anywhere}
+.modal-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-top:14px}
+.modal[hidden],.modal-backdrop[hidden]{display:none}
 @media(max-width:900px){main{margin:12px auto;padding:0 12px}.grid{grid-template-columns:1fr}.sidebar{position:static;order:2}.calendar-column{order:1}.row{grid-template-columns:1fr}.admin-grid{grid-template-columns:1fr}}
 @media(max-width:600px){header{padding:14px 16px}header h1{font-size:18px}.card{padding:14px}.calendar-card{padding:10px}.fc .fc-toolbar{align-items:flex-start}.fc .fc-toolbar-title{font-size:24px}.fc .fc-button{padding:8px 10px}.fc .fc-daygrid-day-frame{min-height:76px}.fc .fc-col-header-cell-cushion,.fc .fc-daygrid-day-number{padding:6px}.fc .fc-daygrid-event{font-size:12px}.fc .fc-list-day-cushion{padding:10px}.fc .fc-list-event td{padding:10px 8px}}
 </style>
@@ -529,7 +569,6 @@ button.danger{background:#c0392b}
 <button>Create reminder</button>
 </form>
 <div id="status" class="status"></div>
-<button id="toggle-past" class="secondary" type="button">Show past reminders</button>
 </div>
 </section>
 <section class="calendar-column">
@@ -545,6 +584,25 @@ button.danger{background:#c0392b}
 </section>
 </div>
 </main>
+<div id="reminder-modal" class="modal-backdrop" hidden>
+<div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+<h2 id="modal-title"></h2>
+<dl>
+<dt>User</dt><dd id="modal-user"></dd>
+<dt>Channel</dt><dd id="modal-channel"></dd>
+<dt>When</dt><dd id="modal-when"></dd>
+<dt>Status</dt><dd id="modal-status"></dd>
+</dl>
+<form id="reschedule-form">
+<input name="delivery" type="datetime-local" required>
+<button>Reschedule</button>
+</form>
+<div class="modal-actions">
+<button id="modal-cancel-reminder" class="danger" type="button">Cancel reminder</button>
+<button id="modal-close" class="secondary" type="button">Close</button>
+</div>
+</div>
+</div>
 <script>
 const csrf='{{CSRF}}';
 const isAdmin={{ADMIN}};
@@ -553,8 +611,8 @@ const defaultReminderChannel='general-to-do-list';
 let users=[];
 let channelGroups=[];
 let calendar;
-let showPast=false;
 let reminderUserInitialized=false;
+let selectedReminder=null;
 const compactCalendar=()=>window.matchMedia('(max-width: 640px)').matches;
 const calendarToolbar=()=>compactCalendar()?{left:'prevText,nextText today',center:'title',right:'listMonth,dayGridMonth'}:{left:'prevText,nextText today',center:'title',right:'dayGridMonth,timeGridWeek,listMonth'};
 const api=(p,o={})=>{o.headers={...(o.headers||{}),'X-CSRF-Token':csrf};return fetch(p,o)};
@@ -634,6 +692,26 @@ function calendarEventContent(i){
  if(String(i.view.type||'').startsWith('dayGrid'))return {html:'<span class="event-title">'+esc(i.event.title)+'</span>'};
  return {html:'<div class="event-title">'+esc(i.event.title)+'</div><div class="event-meta">'+esc(userName(r.creator_id||''))+' · #'+esc(channelName(r.channel_id||''))+'</div>'};
 }
+function localDateTimeValue(value){
+ const d=new Date(value);
+ const pad=n=>String(n).padStart(2,'0');
+ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+function showReminderModal(event){
+ selectedReminder=event;
+ const r=event.extendedProps;
+ document.getElementById('modal-title').textContent=event.title;
+ document.getElementById('modal-user').textContent=userName(r.creator_id||'');
+ document.getElementById('modal-channel').textContent='#'+channelName(r.channel_id||'');
+ document.getElementById('modal-when').textContent=new Date(event.start).toLocaleString();
+ document.getElementById('modal-status').textContent=r.status||'unknown';
+ document.getElementById('reschedule-form').elements.delivery.value=localDateTimeValue(event.start);
+ document.getElementById('reminder-modal').hidden=false;
+}
+function hideReminderModal(){
+ selectedReminder=null;
+ document.getElementById('reminder-modal').hidden=true;
+}
 async function loadAdmin(){
  if(!isAdmin)return;
  const [health,logs,activity]=await Promise.all([api('/api/admin/health').then(r=>r.json()),api('/api/admin/logs').then(r=>r.json()),api('/api/admin/reminder-activity').then(r=>r.json())]);
@@ -644,15 +722,18 @@ async function loadAdmin(){
 document.addEventListener('DOMContentLoaded',()=>{
  let wasCompact=compactCalendar();
  calendar=new FullCalendar.Calendar(document.getElementById('calendar'),{initialView:wasCompact?'listMonth':'dayGridMonth',height:'auto',expandRows:true,aspectRatio:wasCompact?0.9:1.45,dayMaxEventRows:wasCompact?1:3,customButtons:{prevText:{text:'<',click:()=>calendar.prev()},nextText:{text:'>',click:()=>calendar.next()}},headerToolbar:calendarToolbar(),events:(i,ok,fail)=>{
-  api('/api/reminders?start='+encodeURIComponent(i.startStr)+'&end='+encodeURIComponent(i.endStr)+'&all=true&past='+showPast).then(r=>r.ok?r.json():Promise.reject(Error('Unable to load reminders'))).then(ok).catch(fail)
- },eventContent:calendarEventContent,eventClick:i=>{if(confirm('Cancel '+i.event.title+'?'))api('/api/reminders/'+i.event.id+'/cancel',{method:'POST'}).then(r=>{if(!r.ok)throw Error('Cancel failed');calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)}});
+  api('/api/reminders?start='+encodeURIComponent(i.startStr)+'&end='+encodeURIComponent(i.endStr)+'&all=true').then(r=>r.ok?r.json():Promise.reject(Error('Unable to load reminders'))).then(ok).catch(fail)
+ },eventContent:calendarEventContent,eventClick:i=>showReminderModal(i.event)});
  calendar.render();
  if(!isAdmin){document.getElementById('admin-users').hidden=true;document.getElementById('admin-health').hidden=true;document.getElementById('admin-activity').hidden=true;document.getElementById('admin-logs').hidden=true}
  const sessionAction=document.getElementById('session-action');
  sessionAction.textContent=isAdmin?'Sign out':'Admin login';
  sessionAction.onclick=()=>isAdmin?api('/logout',{method:'POST'}).then(()=>location='/'):location='/login';
  document.getElementById('reminder-user').onchange=()=>{const u=selectedUser();if(u)document.getElementById('reminder-timezone').value=u.timezone};
- document.getElementById('toggle-past').onclick=e=>{showPast=!showPast;e.target.textContent=showPast?'Show current reminders':'Show past reminders';calendar.changeView(showPast?'listMonth':(compactCalendar()?'listMonth':'dayGridMonth'));calendar.refetchEvents()};
+ document.getElementById('modal-close').onclick=hideReminderModal;
+ document.getElementById('reminder-modal').onclick=e=>{if(e.target.id==='reminder-modal')hideReminderModal()};
+ document.getElementById('modal-cancel-reminder').onclick=()=>{if(!selectedReminder)return;api('/api/reminders/'+selectedReminder.id+'/cancel',{method:'POST'}).then(r=>{if(!r.ok)throw Error('Cancel failed');hideReminderModal();calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)};
+ document.getElementById('reschedule-form').onsubmit=e=>{e.preventDefault();if(!selectedReminder)return;const f=new FormData(e.target);api('/api/reminders/'+selectedReminder.id+'/reschedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:selectedReminder.extendedProps.timezone||document.getElementById('reminder-timezone').value})}).then(async r=>{if(!r.ok)throw Error(await r.text());hideReminderModal();calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)};
  document.getElementById('user-create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DisplayName:f.get('display'),DiscordUserID:f.get('discord'),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());e.target.reset();e.target.elements.timezone.value='America/New_York';return loadUsers()}).catch(e=>status.textContent=e.message)};
  document.getElementById('users').onclick=e=>{const btn=e.target.closest('button');if(!btn)return;const row=btn.closest('.user');const id=row.dataset.id;if(btn.dataset.action==='delete'){if(!confirm('Delete this user?'))return;api('/api/users/'+id,{method:'DELETE'}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message);return}const body={DisplayName:row.querySelector('[name=display]').value,DiscordUserID:row.querySelector('[name=discord]').value,Timezone:row.querySelector('[name=timezone]').value};api('/api/users/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>{if(!r.ok)throw Error(await r.text());return loadUsers()}).catch(e=>status.textContent=e.message)};
  document.getElementById('create').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const u=selectedUser();if(!u||!u.discord_user_id){status.textContent='Choose a linked Discord user to ping.';return}if(!f.get('channel')){status.textContent='Choose a channel.';return}api('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Title:f.get('title'),CreatorID:u.discord_user_id,ChannelID:f.get('channel'),DeliveryAt:new Date(f.get('delivery')).toISOString(),Timezone:f.get('timezone')})}).then(async r=>{if(!r.ok)throw Error(await r.text());status.textContent='Reminder created.';e.target.elements.title.value='';calendar.refetchEvents();return loadAdmin()}).catch(e=>status.textContent=e.message)};

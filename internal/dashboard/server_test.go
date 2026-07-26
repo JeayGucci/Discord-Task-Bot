@@ -19,7 +19,10 @@ import (
 )
 
 type fakeStore struct {
-	lastList reminders.ListFilter
+	lastList   reminders.ListFilter
+	updated    reminders.UpdateParams
+	statusID   uuid.UUID
+	statusName reminders.Status
 }
 
 func (fakeStore) Create(context.Context, reminders.CreateParams) (reminders.Reminder, error) {
@@ -29,15 +32,20 @@ func (f *fakeStore) List(_ context.Context, filter reminders.ListFilter) ([]remi
 	f.lastList = filter
 	return []reminders.Reminder{}, nil
 }
-func (fakeStore) Get(context.Context, uuid.UUID) (reminders.Reminder, error) {
-	return reminders.Reminder{}, errors.New("unused")
+func (fakeStore) Get(_ context.Context, id uuid.UUID) (reminders.Reminder, error) {
+	return reminders.Reminder{ID: id, Title: "Existing", CreatorID: "target", ChannelID: "channel", DeliveryAt: time.Now().Add(time.Hour), Timezone: "UTC", Status: reminders.StatusScheduled}, nil
 }
-func (fakeStore) Update(context.Context, reminders.UpdateParams) (reminders.Reminder, error) {
-	return reminders.Reminder{}, errors.New("unused")
+func (f *fakeStore) Update(_ context.Context, p reminders.UpdateParams) (reminders.Reminder, error) {
+	f.updated = p
+	return reminders.Reminder{ID: p.ID, Title: p.Title, CreatorID: p.CreatorID, ChannelID: "channel", DeliveryAt: p.DeliveryAt, Timezone: p.Timezone, Status: reminders.StatusScheduled}, nil
 }
-func (fakeStore) SetStatus(context.Context, uuid.UUID, string, reminders.Status) error { return nil }
-func (fakeStore) SetTimezone(context.Context, string, string) error                    { return nil }
-func (fakeStore) GetTimezone(context.Context, string, string) (string, error)          { return "UTC", nil }
+func (f *fakeStore) SetStatus(_ context.Context, id uuid.UUID, _ string, status reminders.Status) error {
+	f.statusID = id
+	f.statusName = status
+	return nil
+}
+func (fakeStore) SetTimezone(context.Context, string, string) error           { return nil }
+func (fakeStore) GetTimezone(context.Context, string, string) (string, error) { return "UTC", nil }
 func (fakeStore) ClaimDue(context.Context, time.Time, int) ([]reminders.Reminder, error) {
 	return nil, nil
 }
@@ -219,10 +227,35 @@ func TestDashboardContainsPermanentDefaults(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	body := rec.Body.String()
-	for _, want := range []string{"defaultReminderUser='jeay'", "defaultReminderChannel='general-to-do-list'", `all=true&past=`} {
+	for _, want := range []string{"defaultReminderUser='jeay'", "defaultReminderChannel='general-to-do-list'", `all=true`, `id="reminder-modal"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
+	}
+}
+
+func TestPublicReminderActions(t *testing.T) {
+	store := &fakeStore{}
+	s := testServer(store, &fakeSessions{}, nil)
+	id := uuid.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/reminders/"+id.String()+"/cancel", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("cancel status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.statusID != id || store.statusName != reminders.StatusCancelled {
+		t.Fatalf("status update = %s %s", store.statusID, store.statusName)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/reminders/"+id.String()+"/reschedule", strings.NewReader(`{"DeliveryAt":"2030-01-01T12:00:00Z","Timezone":"UTC"}`))
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reschedule status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.updated.ID != id || store.updated.Title != "Existing" {
+		t.Fatalf("update params = %#v", store.updated)
 	}
 }
 
