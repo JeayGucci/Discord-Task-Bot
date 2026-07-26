@@ -496,9 +496,6 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		"timezone", r.Timezone,
 	)
 	b.recorder.Record("info", "reminder", "AI reminder created", ops.Attributes("reminder_id", r.ID, "title", r.Title, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", channelID, "delivery_at", r.DeliveryAt, "timezone", r.Timezone))
-	if channelID != m.ChannelID {
-		b.sendCreationConfirmation(channelID, fmt.Sprintf("Created reminder **%s** for <@%s> at <t:%d:F>. ID: `%s`", r.Title, m.Author.ID, r.DeliveryAt.Unix(), r.ID.String()[:8]))
-	}
 	b.reply(m, fmt.Sprintf("Created **%s** for <t:%d:F>. ID: `%s`", r.Title, r.DeliveryAt.Unix(), r.ID.String()[:8]))
 }
 
