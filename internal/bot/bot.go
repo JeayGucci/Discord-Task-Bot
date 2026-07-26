@@ -387,14 +387,18 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 	if err != nil {
 		b.logger.Warn("load conversation", "error", err)
 	}
-	result, err := b.ai.Respond(ctx, content, ai.Context{Now: time.Now(), Timezone: fixedTimezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID, PreviousResponseID: previousID})
+	forceTool := ""
+	if looksLikeReminderRequest(content) {
+		forceTool = "create_reminder"
+	}
+	result, err := b.ai.Respond(ctx, content, ai.Context{Now: time.Now(), Timezone: fixedTimezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID, PreviousResponseID: previousID, ForceTool: forceTool})
 	if err != nil && previousID != "" && strings.Contains(err.Error(), "No tool output found") {
 		b.logger.Warn("reset stale AI conversation after missing tool output", "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "previous_response_id", previousID)
 		b.recorder.Record("warn", "ai", "reset stale AI conversation after missing tool output", ops.Attributes("user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "previous_response_id", previousID))
 		if resetErr := b.store.ResetConversation(ctx, m.Author.ID, m.ChannelID); resetErr != nil {
 			b.logger.Warn("reset stale AI conversation", "error", resetErr)
 		}
-		result, err = b.ai.Respond(ctx, content, ai.Context{Now: time.Now(), Timezone: fixedTimezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID})
+		result, err = b.ai.Respond(ctx, content, ai.Context{Now: time.Now(), Timezone: fixedTimezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID, ForceTool: forceTool})
 	}
 	if err != nil {
 		b.logger.Error("AI response", "error", err)
@@ -479,6 +483,23 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 	b.recorder.Record("info", "reminder", "AI reminder created", ops.Attributes("reminder_id", r.ID, "title", r.Title, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", channelID, "delivery_at", r.DeliveryAt, "timezone", r.Timezone))
 	b.sendCreationConfirmation(channelID, fmt.Sprintf("Created reminder **%s** for <@%s> at <t:%d:F>. ID: `%s`", r.Title, m.Author.ID, r.DeliveryAt.Unix(), r.ID.String()[:8]))
 	b.reply(m, fmt.Sprintf("Created **%s** for <t:%d:F>. ID: `%s`", r.Title, r.DeliveryAt.Unix(), r.ID.String()[:8]))
+}
+
+func looksLikeReminderRequest(content string) bool {
+	text := strings.ToLower(content)
+	if !strings.Contains(text, "remind") && !strings.Contains(text, "reminder") {
+		return false
+	}
+	timeHints := []string{
+		" in ", " at ", " on ", " by ", " tomorrow", " today", " tonight", " next ",
+		"minute", "hour", "day", "week", "month", "am", "pm", ":",
+	}
+	for _, hint := range timeHints {
+		if strings.Contains(text, hint) {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Bot) reply(m *discordgo.MessageCreate, text string) {

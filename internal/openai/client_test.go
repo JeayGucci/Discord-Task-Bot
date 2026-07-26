@@ -31,6 +31,10 @@ func TestRespondParsesFunctionCall(t *testing.T) {
 			Reasoning       struct {
 				Effort string `json:"effort"`
 			} `json:"reasoning"`
+			ToolChoice struct {
+				Type string `json:"type"`
+				Name string `json:"name"`
+			} `json:"tool_choice"`
 			Tools []struct {
 				Name       string `json:"name"`
 				Parameters struct {
@@ -47,6 +51,9 @@ func TestRespondParsesFunctionCall(t *testing.T) {
 		if request.Reasoning.Effort != "minimal" {
 			t.Fatalf("reasoning effort = %q, want minimal", request.Reasoning.Effort)
 		}
+		if request.ToolChoice.Type != "function" || request.ToolChoice.Name != "create_reminder" {
+			t.Fatalf("tool choice = %#v, want forced create_reminder", request.ToolChoice)
+		}
 		for _, tool := range request.Tools {
 			if tool.Name == "get_bot_status" && tool.Parameters.Required == nil {
 				t.Error("get_bot_status tool does not declare required")
@@ -57,7 +64,7 @@ func TestRespondParsesFunctionCall(t *testing.T) {
 	}))
 	defer server.Close()
 	c := New("test-key", "gpt-5-nano", server.URL)
-	result, err := c.Respond(context.Background(), "remind me", Context{Now: time.Now(), Timezone: "America/New_York", UserID: "1"})
+	result, err := c.Respond(context.Background(), "remind me", Context{Now: time.Now(), Timezone: "America/New_York", UserID: "1", ForceTool: "create_reminder"})
 	if err != nil {
 		t.Fatal(err)
 	}

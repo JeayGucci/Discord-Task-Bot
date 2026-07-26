@@ -27,6 +27,7 @@ type Context struct {
 	GuildID            string
 	ChannelID          string
 	PreviousResponseID string
+	ForceTool          string
 }
 
 type Action struct {
@@ -98,6 +99,9 @@ Use create_reminder when the user clearly asks for a reminder and gives or impli
 	}
 	if supportsReasoningEffort(c.model) {
 		body["reasoning"] = map[string]any{"effort": "minimal"}
+	}
+	if meta.ForceTool != "" {
+		body["tool_choice"] = map[string]any{"type": "function", "name": meta.ForceTool}
 	}
 	if meta.PreviousResponseID != "" {
 		body["previous_response_id"] = meta.PreviousResponseID
