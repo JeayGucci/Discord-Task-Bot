@@ -485,7 +485,10 @@ button.danger{background:#c0392b}
 .status-completed,.status-sent{opacity:.65}
 .status-failed{background:#c0392b!important}
 .status-cancelled{text-decoration:line-through;opacity:.5}
+.fc .fc-toolbar{flex-wrap:wrap;gap:8px}
+.fc .fc-toolbar-chunk{display:flex;align-items:center}
 @media(max-width:900px){.grid{grid-template-columns:1fr}.row{grid-template-columns:1fr}.admin-grid{grid-template-columns:1fr}}
+@media(max-width:600px){.fc .fc-toolbar{align-items:flex-start}.fc .fc-toolbar-title{font-size:28px}.fc .fc-button{padding:7px 9px}}
 </style>
 </head>
 <body>
@@ -575,7 +578,7 @@ async function loadChannels(){
  if(!r.ok)throw Error(await r.text());
  channelGroups=await r.json();
  renderChannels();
- if(calendar)calendar.rerenderEvents();
+ if(calendar)calendar.refetchEvents();
 }
 function renderChannels(){
  const select=document.getElementById('reminder-channel');
@@ -620,7 +623,7 @@ async function loadAdmin(){
  renderActivity(activity);
 }
 document.addEventListener('DOMContentLoaded',()=>{
- calendar=new FullCalendar.Calendar(document.getElementById('calendar'),{initialView:'dayGridMonth',headerToolbar:{left:'prev,next today',center:'title',right:'dayGridMonth,timeGridWeek,listMonth'},events:(i,ok,fail)=>{
+ calendar=new FullCalendar.Calendar(document.getElementById('calendar'),{initialView:'dayGridMonth',customButtons:{prevText:{text:'<',click:()=>calendar.prev()},nextText:{text:'>',click:()=>calendar.next()}},headerToolbar:{left:'prevText,nextText today',center:'title',right:'dayGridMonth,timeGridWeek,listMonth'},events:(i,ok,fail)=>{
   const u=selectedUser();
   const creator=u&&u.discord_user_id?u.discord_user_id:'';
   api('/api/reminders?start='+encodeURIComponent(i.startStr)+'&end='+encodeURIComponent(i.endStr)+'&creator_id='+encodeURIComponent(creator)+'&all='+(creator===''?'true':'false')+'&past='+showPast).then(r=>r.ok?r.json():Promise.reject(Error('Unable to load reminders'))).then(ok).catch(fail)
