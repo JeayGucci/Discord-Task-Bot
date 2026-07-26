@@ -93,6 +93,7 @@ Never claim an action succeeded; the application reports execution results. Ask 
 					"type":                 "object",
 					"additionalProperties": false,
 					"properties":           map[string]any{},
+					"required":             []string{},
 				},
 			},
 		},

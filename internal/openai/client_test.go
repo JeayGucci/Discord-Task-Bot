@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,22 @@ func TestRespondParsesFunctionCall(t *testing.T) {
 		}
 		if !strings.Contains(string(body), "get_bot_status") {
 			t.Error("request does not contain get_bot_status tool")
+		}
+		var request struct {
+			Tools []struct {
+				Name       string `json:"name"`
+				Parameters struct {
+					Required []string `json:"required"`
+				} `json:"parameters"`
+			} `json:"tools"`
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Fatal(err)
+		}
+		for _, tool := range request.Tools {
+			if tool.Name == "get_bot_status" && tool.Parameters.Required == nil {
+				t.Error("get_bot_status tool does not declare required")
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"resp_123","output":[{"type":"function_call","name":"create_reminder","arguments":{"title":"Test","description":"","delivery_at":"2030-01-01T12:00:00-05:00"}}],"usage":{"input_tokens":20,"output_tokens":10}}`))
