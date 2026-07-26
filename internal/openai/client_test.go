@@ -24,7 +24,8 @@ func TestRespondParsesFunctionCall(t *testing.T) {
 			t.Error("request does not contain get_bot_status tool")
 		}
 		var request struct {
-			Tools []struct {
+			MaxOutputTokens int `json:"max_output_tokens"`
+			Tools           []struct {
 				Name       string `json:"name"`
 				Parameters struct {
 					Required []string `json:"required"`
@@ -33,6 +34,9 @@ func TestRespondParsesFunctionCall(t *testing.T) {
 		}
 		if err := json.Unmarshal(body, &request); err != nil {
 			t.Fatal(err)
+		}
+		if request.MaxOutputTokens < 1000 {
+			t.Fatalf("max_output_tokens = %d, want at least 1000", request.MaxOutputTokens)
 		}
 		for _, tool := range request.Tools {
 			if tool.Name == "get_bot_status" && tool.Parameters.Required == nil {

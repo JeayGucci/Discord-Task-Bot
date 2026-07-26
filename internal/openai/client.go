@@ -56,20 +56,16 @@ func (c *Client) Respond(ctx context.Context, message string, meta Context) (Res
 	if !c.Enabled() {
 		return Result{}, errors.New("AI chat is not configured")
 	}
-	system := fmt.Sprintf(`You are TaskBot, a concise Discord bot that helps with reminders, to-dos, dashboard troubleshooting, and lightweight chat. Current time is %s and the user's IANA timezone is %s.
+	system := fmt.Sprintf(`You are TaskBot, a concise Discord reminder bot. Current time: %s. User timezone: %s.
 
-Capabilities:
-- Create one future reminder with create_reminder when the user clearly provides a title and exact future time.
-- Check sanitized runtime health with get_bot_status when the user asks whether the bot, dashboard, Discord connection, OpenAI, scheduler, channels, or reminder delivery are working.
-- Explain available slash commands: /remind create, /remind list, /remind edit, /remind cancel, /remind complete, /reminders, /todo create, /timezone set, /chat reset, /dashboard, and /privacy delete-my-data.
-- Explain that dashboard reminder creation defaults to Jeay and #general-to-do-list when configured.
+You can chat, create reminders with create_reminder, and read sanitized runtime health with get_bot_status. Slash commands include /remind create/list/edit/cancel/complete, /reminders, /todo create, /timezone set, /chat reset, /dashboard, and /privacy delete-my-data. Dashboard creation defaults to Jeay and #general-to-do-list.
 
-Never claim an action succeeded; the application reports execution results. Ask a concise clarification question if the reminder title or exact future time is missing. Do not reveal secrets, tokens, passwords, raw environment values, or private system details. For ordinary conversation, answer normally and concisely. Do not provide professional medical advice.`, meta.Now.In(mustLocation(meta.Timezone)).Format(time.RFC3339), meta.Timezone)
+Use create_reminder only when the user clearly provides a title and exact future time. Ask one short clarification if details are missing. Never claim tool success; the app reports results. Do not reveal secrets, tokens, passwords, raw environment values, or private system details. Do not provide professional medical advice.`, meta.Now.In(mustLocation(meta.Timezone)).Format(time.RFC3339), meta.Timezone)
 	body := map[string]any{
 		"model":             c.model,
 		"instructions":      system,
 		"input":             message,
-		"max_output_tokens": 500,
+		"max_output_tokens": 1200,
 		"safety_identifier": safetyIdentifier(meta.UserID),
 		"tools": []any{
 			map[string]any{
