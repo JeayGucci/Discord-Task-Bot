@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +39,8 @@ type Bot struct {
 }
 
 const fixedTimezone = "America/New_York"
+
+var relativeReminderPattern = regexp.MustCompile(`\bin\s+([a-z0-9]+)\s+(minute|minutes|min|mins|hour|hours|hr|hrs|day|days|week|weeks)\b`)
 
 func New(token, appID, guildID, ownerID, reminderChannelID, streamURL, dashboardURL string, store reminders.Store, aiClient *ai.Client, logger *slog.Logger, recorder *ops.Recorder) (*Bot, error) {
 	s, err := discordgo.New("Bot " + token)
@@ -383,6 +387,7 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 	defer cancel()
 	stopTyping := b.startTyping(ctx, m.ChannelID)
 	defer stopTyping()
+	requestNow := time.Now()
 	previousID, err := b.store.GetConversation(ctx, m.Author.ID, m.ChannelID)
 	if err != nil {
 		b.logger.Warn("load conversation", "error", err)
@@ -391,14 +396,14 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 	if looksLikeReminderRequest(content) {
 		forceTool = "create_reminder"
 	}
-	result, err := b.ai.Respond(ctx, content, ai.Context{Now: time.Now(), Timezone: fixedTimezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID, PreviousResponseID: previousID, ForceTool: forceTool})
+	result, err := b.ai.Respond(ctx, content, ai.Context{Now: requestNow, Timezone: fixedTimezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID, PreviousResponseID: previousID, ForceTool: forceTool})
 	if err != nil && previousID != "" && strings.Contains(err.Error(), "No tool output found") {
 		b.logger.Warn("reset stale AI conversation after missing tool output", "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "previous_response_id", previousID)
 		b.recorder.Record("warn", "ai", "reset stale AI conversation after missing tool output", ops.Attributes("user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "previous_response_id", previousID))
 		if resetErr := b.store.ResetConversation(ctx, m.Author.ID, m.ChannelID); resetErr != nil {
 			b.logger.Warn("reset stale AI conversation", "error", resetErr)
 		}
-		result, err = b.ai.Respond(ctx, content, ai.Context{Now: time.Now(), Timezone: fixedTimezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID, ForceTool: forceTool})
+		result, err = b.ai.Respond(ctx, content, ai.Context{Now: requestNow, Timezone: fixedTimezone, UserID: m.Author.ID, GuildID: m.GuildID, ChannelID: m.ChannelID, ForceTool: forceTool})
 	}
 	if err != nil {
 		b.logger.Error("AI response", "error", err)
@@ -455,7 +460,14 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		return
 	}
 	delivery, err := time.Parse(time.RFC3339, args.DeliveryAt)
-	if err != nil {
+	if forceTool == "create_reminder" {
+		if inferred, inferErr := parseRelativeReminderTime(content, fixedTimezone, requestNow); inferErr == nil {
+			delivery = inferred
+			err = nil
+			b.recorder.Record("info", "reminder", "used deterministic relative reminder time", ops.Attributes("user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID, "content", truncate(content, 200), "delivery_at", delivery))
+		}
+	}
+	if err != nil || !delivery.After(requestNow) {
 		b.reply(m, "I need an exact date and time before creating that reminder.")
 		return
 	}
@@ -500,6 +512,53 @@ func looksLikeReminderRequest(content string) bool {
 		}
 	}
 	return false
+}
+
+func parseRelativeReminderTime(content, timezone string, now time.Time) (time.Time, error) {
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return time.Time{}, err
+	}
+	match := relativeReminderPattern.FindStringSubmatch(strings.ToLower(content))
+	if len(match) != 3 {
+		return time.Time{}, errors.New("no relative time found")
+	}
+	amount, err := parseSmallNumber(match[1])
+	if err != nil {
+		return time.Time{}, err
+	}
+	var d time.Duration
+	switch match[2] {
+	case "minute", "minutes", "min", "mins":
+		d = time.Duration(amount) * time.Minute
+	case "hour", "hours", "hr", "hrs":
+		d = time.Duration(amount) * time.Hour
+	case "day", "days":
+		d = time.Duration(amount) * 24 * time.Hour
+	case "week", "weeks":
+		d = time.Duration(amount) * 7 * 24 * time.Hour
+	default:
+		return time.Time{}, errors.New("unsupported relative time unit")
+	}
+	if d <= 0 {
+		return time.Time{}, errors.New("relative time must be positive")
+	}
+	return now.In(loc).Add(d), nil
+}
+
+func parseSmallNumber(value string) (int, error) {
+	if n, err := strconv.Atoi(value); err == nil {
+		return n, nil
+	}
+	words := map[string]int{
+		"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+		"six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+		"twelve": 12,
+	}
+	if n, ok := words[value]; ok {
+		return n, nil
+	}
+	return 0, errors.New("unsupported number")
 }
 
 func (b *Bot) reply(m *discordgo.MessageCreate, text string) {
