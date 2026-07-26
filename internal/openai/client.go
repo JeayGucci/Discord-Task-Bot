@@ -124,40 +124,59 @@ Never claim an action succeeded; the application reports execution results. Ask 
 		return Result{}, fmt.Errorf("OpenAI API returned %d: %s", resp.StatusCode, compact(data, 500))
 	}
 	var wire struct {
-		ID         string `json:"id"`
-		OutputText string `json:"output_text"`
-		Usage      Usage  `json:"usage"`
-		Output     []struct {
-			Type      string          `json:"type"`
-			Name      string          `json:"name"`
-			Arguments json.RawMessage `json:"arguments"`
-			Content   []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"output"`
+		ID         string            `json:"id"`
+		OutputText string            `json:"output_text"`
+		Usage      Usage             `json:"usage"`
+		Output     []json.RawMessage `json:"output"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return Result{}, err
 	}
 	result := Result{Text: wire.OutputText, Usage: wire.Usage, ResponseID: wire.ID}
 	for _, item := range wire.Output {
-		if item.Type == "function_call" {
-			result.Action = &Action{Name: item.Name, Arguments: item.Arguments}
+		if inspectOutputItem(item, &result) {
 			return result, nil
-		}
-		if result.Text == "" {
-			for _, content := range item.Content {
-				if content.Type == "output_text" {
-					result.Text += content.Text
-				}
-			}
 		}
 	}
 	if result.Text == "" {
-		return Result{}, errors.New("OpenAI returned no usable output")
+		return Result{}, fmt.Errorf("OpenAI returned no usable output: %s", compact(data, 800))
 	}
 	return result, nil
+}
+
+func inspectOutputItem(raw json.RawMessage, result *Result) bool {
+	var item map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return false
+	}
+	itemType := jsonString(item["type"])
+	name := jsonString(item["name"])
+	if name != "" {
+		if arguments, ok := item["arguments"]; ok && (strings.Contains(itemType, "function") || strings.Contains(itemType, "tool") || itemType == "") {
+			result.Action = &Action{Name: name, Arguments: arguments}
+			return true
+		}
+	}
+	for _, key := range []string{"output_text", "text"} {
+		if text := jsonString(item[key]); text != "" {
+			result.Text += text
+		}
+	}
+	var content []json.RawMessage
+	if err := json.Unmarshal(item["content"], &content); err == nil {
+		for _, child := range content {
+			if inspectOutputItem(child, result) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func jsonString(raw json.RawMessage) string {
+	var value string
+	_ = json.Unmarshal(raw, &value)
+	return value
 }
 
 func mustLocation(name string) *time.Location {
