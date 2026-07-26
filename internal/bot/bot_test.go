@@ -86,6 +86,35 @@ func TestHasRelativeReminderTimeHint(t *testing.T) {
 	}
 }
 
+func TestReminderChannelFromMention(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		fallback string
+		want     string
+	}{
+		{
+			name:     "defaults to source channel",
+			content:  "remind me in one minute to test",
+			fallback: "source-channel",
+			want:     "source-channel",
+		},
+		{
+			name:     "uses mentioned channel",
+			content:  "remind me in one minute in <#1527575459595026513>",
+			fallback: "source-channel",
+			want:     "1527575459595026513",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := reminderChannelFromMention(tt.content, tt.fallback); got != tt.want {
+				t.Fatalf("reminderChannelFromMention() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseUserTimeUsesEasternDSTRules(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	tests := []struct {

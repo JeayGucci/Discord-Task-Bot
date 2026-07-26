@@ -41,6 +41,7 @@ type Bot struct {
 const fixedTimezone = "America/New_York"
 
 var relativeReminderPattern = regexp.MustCompile(`\b(?:(?:in|after|for)\s+)?([a-z0-9]+)\s+(minute|minutes|min|mins|hour|hours|hr|hrs|day|days|week|weeks)(?:\s+from\s+now)?\b`)
+var channelMentionPattern = regexp.MustCompile(`<#([0-9]+)>`)
 
 func New(token, appID, guildID, ownerID, reminderChannelID, streamURL, dashboardURL string, store reminders.Store, aiClient *ai.Client, logger *slog.Logger, recorder *ops.Recorder) (*Bot, error) {
 	s, err := discordgo.New("Bot " + token)
@@ -476,10 +477,7 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		b.reply(m, "I need an exact date and time before creating that reminder.")
 		return
 	}
-	channelID := strings.TrimSpace(b.reminderChannelID)
-	if channelID == "" {
-		channelID = m.ChannelID
-	}
+	channelID := reminderChannelFromMention(content, m.ChannelID)
 	r, err := b.store.Create(ctx, reminders.CreateParams{Title: args.Title, Description: args.Description, CreatorID: m.Author.ID, GuildID: m.GuildID, ChannelID: channelID, MentionTarget: "<@" + m.Author.ID + ">", DeliveryAt: delivery, Timezone: fixedTimezone})
 	if err != nil {
 		b.logger.Error("AI reminder creation failed", "error", err, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", m.ChannelID)
@@ -498,8 +496,18 @@ func (b *Bot) handleMention(m *discordgo.MessageCreate, content string) {
 		"timezone", r.Timezone,
 	)
 	b.recorder.Record("info", "reminder", "AI reminder created", ops.Attributes("reminder_id", r.ID, "title", r.Title, "user_id", m.Author.ID, "guild_id", m.GuildID, "channel_id", channelID, "delivery_at", r.DeliveryAt, "timezone", r.Timezone))
-	b.sendCreationConfirmation(channelID, fmt.Sprintf("Created reminder **%s** for <@%s> at <t:%d:F>. ID: `%s`", r.Title, m.Author.ID, r.DeliveryAt.Unix(), r.ID.String()[:8]))
+	if channelID != m.ChannelID {
+		b.sendCreationConfirmation(channelID, fmt.Sprintf("Created reminder **%s** for <@%s> at <t:%d:F>. ID: `%s`", r.Title, m.Author.ID, r.DeliveryAt.Unix(), r.ID.String()[:8]))
+	}
 	b.reply(m, fmt.Sprintf("Created **%s** for <t:%d:F>. ID: `%s`", r.Title, r.DeliveryAt.Unix(), r.ID.String()[:8]))
+}
+
+func reminderChannelFromMention(content, fallbackChannelID string) string {
+	match := channelMentionPattern.FindStringSubmatch(content)
+	if len(match) == 2 {
+		return match[1]
+	}
+	return fallbackChannelID
 }
 
 func looksLikeReminderRequest(content string) bool {
