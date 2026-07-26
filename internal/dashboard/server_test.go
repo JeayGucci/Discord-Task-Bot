@@ -219,7 +219,7 @@ func TestDashboardContainsPermanentDefaults(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	body := rec.Body.String()
-	for _, want := range []string{"defaultReminderUser='jeay'", "defaultReminderChannel='general-to-do-list'"} {
+	for _, want := range []string{"defaultReminderUser='jeay'", "defaultReminderChannel='general-to-do-list'", `all=true&past=`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
