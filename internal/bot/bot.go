@@ -13,12 +13,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
-	"github.com/google/uuid"
 	"github.com/JeayGucci/Discord-Task-Bot/internal/channels"
 	ai "github.com/JeayGucci/Discord-Task-Bot/internal/openai"
 	"github.com/JeayGucci/Discord-Task-Bot/internal/ops"
 	"github.com/JeayGucci/Discord-Task-Bot/internal/reminders"
+	"github.com/bwmarrin/discordgo"
+	"github.com/google/uuid"
 )
 
 type Bot struct {

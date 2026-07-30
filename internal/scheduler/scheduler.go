@@ -7,9 +7,9 @@ import (
 	"math"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/JeayGucci/Discord-Task-Bot/internal/ops"
 	"github.com/JeayGucci/Discord-Task-Bot/internal/reminders"
+	"github.com/google/uuid"
 )
 
 type Sender interface {

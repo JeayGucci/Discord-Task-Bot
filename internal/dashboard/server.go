@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/JeayGucci/Discord-Task-Bot/internal/channels"
 	"github.com/JeayGucci/Discord-Task-Bot/internal/ops"
 	"github.com/JeayGucci/Discord-Task-Bot/internal/reminders"
 	"github.com/JeayGucci/Discord-Task-Bot/internal/users"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 

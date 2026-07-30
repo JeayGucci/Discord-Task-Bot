@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JeayGucci/Discord-Task-Bot/internal/reminders"
+	"github.com/JeayGucci/Discord-Task-Bot/internal/users"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/JeayGucci/Discord-Task-Bot/internal/reminders"
-	"github.com/JeayGucci/Discord-Task-Bot/internal/users"
 )
 
 //go:embed migrations/*.sql
