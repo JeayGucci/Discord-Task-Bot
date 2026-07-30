@@ -96,12 +96,12 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 - `/privacy delete-my-data`
 - Natural-language reminder creation when the bot is mentioned
 - General AI conversation when the bot is mentioned
-- Owner allowlisting through `DISCORD_OWNER_ID`
+- Owner-only `/reminders` access through `DISCORD_OWNER_ID`; normal chat and reminder commands are available to server users.
 - Guild-scoped command registration during development/initial deployment
 - Production command registration is opt-in through `DISCORD_REGISTER_COMMANDS=true`; leave it disabled for normal deploys.
 - Streaming activity configured through `DISCORD_STREAM_URL`
 - `/dashboard` command that returns the configured TaskBot dashboard URL
-- Slash reminder creation asks for the Discord user to ping and the Discord channel to post in; `DISCORD_REMINDER_CHANNEL_ID` is the fallback for older or natural-language reminders.
+- Slash reminder creation asks for the Discord user to ping and the Discord channel to post in; AI-created reminders default to the channel where the bot was mentioned unless the user mentions another channel. `DISCORD_REMINDER_CHANNEL_ID` remains the fallback for older reminders without a stored channel.
 - Discord-visible operational audit messages are disabled; created-reminder confirmations are posted in the selected reminder channel.
 - Admin-only dashboard health, reminder activity, and runtime log panels
 - Structured Railway/stdout logs for AI responses, AI tool actions, slash commands, and reminder delivery

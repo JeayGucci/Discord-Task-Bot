@@ -192,7 +192,6 @@ func (b *Bot) ListChannels(ctx context.Context) ([]channels.Group, error) {
 	return result, nil
 }
 
-func (b *Bot) allowed(userID string) bool { return b.ownerID == "" || b.ownerID == userID }
 func (b *Bot) isOwner(userID string) bool { return b.ownerID != "" && b.ownerID == userID }
 
 func (b *Bot) dashboardMessage() string {
@@ -216,10 +215,6 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	}
 	user := interactionUser(i)
 	if user == nil {
-		return
-	}
-	if !b.allowed(user.ID) {
-		b.respond(i, "This bot is currently restricted to its owner.", true)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -371,9 +366,6 @@ func (b *Bot) handleTimezone(ctx context.Context, userID string, options []*disc
 
 func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author.Bot || s.State.User == nil || !strings.Contains(m.Content, "<@"+s.State.User.ID+">") {
-		return
-	}
-	if !b.allowed(m.Author.ID) {
 		return
 	}
 	clean := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(m.Content, "<@"+s.State.User.ID+">", ""), "<@!"+s.State.User.ID+">", ""))

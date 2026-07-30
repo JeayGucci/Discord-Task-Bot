@@ -22,7 +22,7 @@ The authoritative product and architecture plan is in [plan.md](plan.md).
 - Health and readiness checks for Railway.
 - Admin-only dashboard health, reminder activity, and runtime log panels.
 - Structured Railway/stdout logs for AI responses, AI tool actions, slash commands, and reminder delivery.
-- Reminder pings are delivered to the selected Discord channel; `DISCORD_REMINDER_CHANNEL_ID` is a fallback for older or natural-language reminders.
+- Reminder pings are delivered to the selected Discord channel; AI-created reminders default to the channel where the bot was mentioned unless the user mentions another channel.
 - Discord-visible operational audit messages are disabled; created-reminder confirmations are posted in the selected reminder channel.
 - Discord streaming presence labeled “Streamlining your tasks”.
 - `/dashboard` command that returns the private dashboard URL.
@@ -51,8 +51,8 @@ The service applies versioned SQL migrations at startup. If Discord credentials 
 4. Grant View Channels, Send Messages, Read Message History, and Use Slash Commands permissions for every category/channel the bot should list or post into.
 5. Set `DISCORD_BOT_TOKEN` and `DISCORD_APPLICATION_ID`.
 6. During development, set `DISCORD_GUILD_ID` to a private test server for immediate command updates.
-7. Set `DISCORD_OWNER_ID` to your user ID to keep the initial bot private.
-8. Set `DISCORD_REMINDER_CHANNEL_ID` as the fallback channel for older or natural-language reminders.
+7. Set `DISCORD_OWNER_ID` to your user ID for owner-only admin commands such as `/reminders`.
+8. Set `DISCORD_REMINDER_CHANNEL_ID` as the fallback channel for older reminders that do not have a stored channel.
 9. `DISCORD_REGISTER_COMMANDS` defaults to enabled outside production and disabled in production. Temporarily set it to `true` in production only when slash command definitions need to be pushed, then turn it back off.
 10. Set `DISCORD_STREAM_URL` to a Twitch or YouTube URL if you want the bot to show a streaming presence. Discord does not render arbitrary URLs as streaming.
 11. Put `DASHBOARD_BASE_URL` in the bot profile description in the Developer Portal if you want it visible on the bot profile.
