@@ -10,13 +10,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jmantheitguy/Discord-Task-Bot/internal/bot"
-	"github.com/jmantheitguy/Discord-Task-Bot/internal/config"
-	"github.com/jmantheitguy/Discord-Task-Bot/internal/dashboard"
-	"github.com/jmantheitguy/Discord-Task-Bot/internal/database"
-	ai "github.com/jmantheitguy/Discord-Task-Bot/internal/openai"
-	"github.com/jmantheitguy/Discord-Task-Bot/internal/ops"
-	"github.com/jmantheitguy/Discord-Task-Bot/internal/scheduler"
+	"github.com/JeayGucci/Discord-Task-Bot/internal/bot"
+	"github.com/JeayGucci/Discord-Task-Bot/internal/config"
+	"github.com/JeayGucci/Discord-Task-Bot/internal/dashboard"
+	"github.com/JeayGucci/Discord-Task-Bot/internal/database"
+	ai "github.com/JeayGucci/Discord-Task-Bot/internal/openai"
+	"github.com/JeayGucci/Discord-Task-Bot/internal/ops"
+	"github.com/JeayGucci/Discord-Task-Bot/internal/scheduler"
 )
 
 func main() {

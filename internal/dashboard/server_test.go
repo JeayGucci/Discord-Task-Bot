@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jmantheitguy/Discord-Task-Bot/internal/channels"
-	"github.com/jmantheitguy/Discord-Task-Bot/internal/ops"
-	"github.com/jmantheitguy/Discord-Task-Bot/internal/reminders"
-	"github.com/jmantheitguy/Discord-Task-Bot/internal/users"
+	"github.com/JeayGucci/Discord-Task-Bot/internal/channels"
+	"github.com/JeayGucci/Discord-Task-Bot/internal/ops"
+	"github.com/JeayGucci/Discord-Task-Bot/internal/reminders"
+	"github.com/JeayGucci/Discord-Task-Bot/internal/users"
 )
 
 type fakeStore struct {

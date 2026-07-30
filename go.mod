@@ -1,4 +1,4 @@
-module github.com/jmantheitguy/Discord-Task-Bot
+module github.com/JeayGucci/Discord-Task-Bot
 
 go 1.26
 

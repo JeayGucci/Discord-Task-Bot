@@ -6,7 +6,7 @@ This document captures the decisions and implementation context from the origina
 
 ## Current state
 
-- GitHub repository: <https://github.com/jmantheitguy/Discord-Task-Bot>
+- GitHub repository: <https://github.com/JeayGucci/Discord-Task-Bot>
 - Production dashboard: <https://discord-task-bot-production.up.railway.app/>
 - Health endpoint: <https://discord-task-bot-production.up.railway.app/healthz>
 - Readiness endpoint: <https://discord-task-bot-production.up.railway.app/readyz>
@@ -168,7 +168,7 @@ Railway supplies `PORT`; do not set it manually. The application defaults to `80
 Clone and inspect:
 
 ```bash
-git clone https://github.com/jmantheitguy/Discord-Task-Bot.git
+git clone https://github.com/JeayGucci/Discord-Task-Bot.git
 cd Discord-Task-Bot
 cp .env.example .env
 ```

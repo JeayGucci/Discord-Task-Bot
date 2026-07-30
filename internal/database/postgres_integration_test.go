@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jmantheitguy/Discord-Task-Bot/internal/reminders"
+	"github.com/JeayGucci/Discord-Task-Bot/internal/reminders"
 )
 
 func TestPostgresReminderLifecycle(t *testing.T) {
